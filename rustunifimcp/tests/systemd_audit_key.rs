@@ -43,10 +43,31 @@ fn the_lxc_installer_generates_the_audit_hmac_key() {
     let text = std::fs::read_to_string(repo_root().join("packaging/lxc/install.sh"))
         .expect("read install.sh");
     assert!(
-        text.contains("audit-hmac.key"),
+        text.contains("openssl rand -hex 32"),
         "install.sh must generate /var/lib/unifimcp/audit-hmac.key on first \
          install, mirroring rust-junosmcp's install.sh, so a fresh LXC \
          deployment starts keyed rather than relying solely on the binary's \
          own on-demand generation"
+    );
+    assert!(
+        text.contains("install -m 0600 -o unifimcp -g unifimcp"),
+        "the generated key must be installed into place with `install`, not \
+         chowned/chmoded in place after the fact, got: {text}"
+    );
+}
+
+#[test]
+fn the_lxc_installer_refuses_a_non_regular_audit_hmac_key_path() {
+    let text = std::fs::read_to_string(repo_root().join("packaging/lxc/install.sh"))
+        .expect("read install.sh");
+    // /var/lib/unifimcp is writable by the unifimcp service account, so a
+    // compromised service process could leave a symlink at the key path
+    // for the next install/upgrade run (as root) to follow. The installer
+    // must refuse a symlink or other non-regular file rather than
+    // chown/chmod-ing through it.
+    assert!(
+        text.contains("-L \"$audit_key\""),
+        "install.sh must refuse a symlinked audit-hmac.key path before \
+         touching it, got: {text}"
     );
 }

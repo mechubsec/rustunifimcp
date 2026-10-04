@@ -181,19 +181,31 @@ fi
 # reasoning as rust-junosmcp's install.sh (#334). This LXC path previously
 # shipped unkeyed audit by default, same as the five container images
 # (mecmcp#376 / MEC-978) -- the gap just had no code here to key it with.
-if [ ! -e /var/lib/unifimcp/audit-hmac.key ]; then
+#
+# /var/lib/unifimcp is 0700 owned by the unifimcp service account, so a
+# compromised service process could swap the key file for a symlink to a
+# root-owned file before the next install/upgrade runs as root. Refuse
+# anything that isn't a plain regular file before touching it, and only
+# chown/chmod the file this run just created (via `install`, which creates
+# the destination directly rather than writing through an existing path).
+audit_key=/var/lib/unifimcp/audit-hmac.key
+if [ -L "$audit_key" ] || { [ -e "$audit_key" ] && [ ! -f "$audit_key" ]; }; then
+    die "$audit_key is not a regular file; refusing"
+fi
+if [ ! -e "$audit_key" ]; then
+    audit_key_tmp=$(mktemp)
     if command -v openssl >/dev/null 2>&1; then
-        openssl rand -hex 32 > /var/lib/unifimcp/audit-hmac.key
+        openssl rand -hex 32 > "$audit_key_tmp"
     elif command -v head >/dev/null 2>&1 && [ -e /dev/urandom ]; then
-        head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > /var/lib/unifimcp/audit-hmac.key
+        head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$audit_key_tmp"
     else
         echo "    WARNING: cannot generate audit-hmac.key (no openssl or /dev/urandom)" >&2
-        echo "    WARNING: audit log will not be tamper-evident until the key is created" >&2
+        echo "    WARNING: the server will generate it on first start" >&2
     fi
-fi
-if [ -e /var/lib/unifimcp/audit-hmac.key ]; then
-    chown unifimcp:unifimcp /var/lib/unifimcp/audit-hmac.key
-    chmod 0600 /var/lib/unifimcp/audit-hmac.key
+    if [ -s "$audit_key_tmp" ]; then
+        install -m 0600 -o unifimcp -g unifimcp "$audit_key_tmp" "$audit_key"
+    fi
+    rm -f "$audit_key_tmp"
 fi
 
 # Install systemd unit
