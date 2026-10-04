@@ -11,6 +11,7 @@ ExecStart=/usr/local/bin/rustunifimcp \
     --controllers-file /etc/unifimcp/controllers.json \
     --tokens-file /var/lib/unifimcp/tokens.json \
     --state-file /var/lib/unifimcp/changesets.json \
+    --audit-hmac-key-file /var/lib/unifimcp/audit-hmac.key \
     --transport streamable-http \
     --host @UNIFIMCP_BIND_HOST@ --port 30033 \
     --allowed-host @UNIFIMCP_ALLOWED_HOST@ \
