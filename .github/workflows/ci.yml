@@ -60,7 +60,11 @@ jobs:
           argv=$(docker inspect "$container_id" --format '{{join .Args "\n"}}')
           docker rm "$container_id" > /dev/null
 
-          for p in /etc/unifimcp/controllers.json /var/lib/unifimcp/tokens.json /var/lib/unifimcp/changesets.json; do
+          # Also covers mecmcp#376 / MEC-978: the audit HMAC key path must
+          # survive an operator override the same way the other config paths
+          # do, or the image ships keyless audit the moment anyone passes
+          # --host.
+          for p in /etc/unifimcp/controllers.json /var/lib/unifimcp/tokens.json /var/lib/unifimcp/changesets.json /var/lib/unifimcp/audit-hmac.key; do
             echo "$argv" | grep -q -- "$p" || { echo "FAIL: $p missing from argv with --host override"; exit 1; }
           done
           echo "PASS: config paths survive --host override"
