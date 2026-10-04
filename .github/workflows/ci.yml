@@ -56,11 +56,16 @@ jobs:
           # Docker replaces CMD entirely when the caller supplies args, but appends to
           # ENTRYPOINT, so config paths must live in ENTRYPOINT or they vanish the
           # moment anyone passes --host.
+          #
+          # /var/lib/unifimcp/audit-hmac.key (--audit-hmac-key-file) is in this same
+          # list for mecmcp#376 / MEC-978: it closes the "5 of 6 server images run
+          # unkeyed audit" gap, and without this guard a future edit could drop the
+          # flag from ENTRYPOINT and ship an unkeyed-audit image with no CI failure.
           container_id=$(docker create rustunifimcp:ci --host 0.0.0.0)
           argv=$(docker inspect "$container_id" --format '{{join .Args "\n"}}')
           docker rm "$container_id" > /dev/null
 
-          for p in /etc/unifimcp/controllers.json /var/lib/unifimcp/tokens.json /var/lib/unifimcp/changesets.json; do
+          for p in /etc/unifimcp/controllers.json /var/lib/unifimcp/tokens.json /var/lib/unifimcp/changesets.json /var/lib/unifimcp/audit-hmac.key; do
             echo "$argv" | grep -q -- "$p" || { echo "FAIL: $p missing from argv with --host override"; exit 1; }
           done
           echo "PASS: config paths survive --host override"
