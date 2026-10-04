@@ -168,12 +168,52 @@ fi
 # tokens.json under /var/lib, never /etc — /etc/unifimcp is read-only to the
 # service under ProtectSystem=strict. This is the most repeated defect in the
 # fleet's backlog (junos#333, sdc#92, mist#42, proxmox#22).
-if [ ! -e /var/lib/unifimcp/tokens.json ]; then
-    printf '{"version":1,"tokens":[]}\n' > /var/lib/unifimcp/tokens.json
-    chown unifimcp:unifimcp /var/lib/unifimcp/tokens.json
-    chmod 0600 /var/lib/unifimcp/tokens.json
+#
+# Only provision this path if it is absent, refuse any existing non-regular
+# path, and install freshly generated content atomically with a fixed owner
+# and mode -- never write through an existing path and change its
+# ownership/mode afterward.
+tokens_file=/var/lib/unifimcp/tokens.json
+if [ -L "$tokens_file" ] || { [ -e "$tokens_file" ] && [ ! -f "$tokens_file" ]; }; then
+    die "$tokens_file is not a regular file; refusing"
+fi
+if [ ! -e "$tokens_file" ]; then
+    tokens_tmp=$(mktemp)
+    printf '{"version":1,"tokens":[]}\n' > "$tokens_tmp"
+    install -m 0600 -o unifimcp -g unifimcp "$tokens_tmp" "$tokens_file"
+    rm -f "$tokens_tmp"
 else
     echo "    /var/lib/unifimcp/tokens.json exists; not overwriting"
+fi
+
+# Generate the audit HMAC key if it does not exist. Do NOT regenerate on
+# upgrade -- a new key breaks verification of every prior record, the same
+# reasoning as rust-junosmcp's install.sh (#334). This LXC path previously
+# shipped unkeyed audit by default, same as the five container images
+# (mecmcp#376 / MEC-978) -- the gap just had no code here to key it with.
+#
+# Only provision this path if it is absent, refuse any existing non-regular
+# path, and install freshly generated content atomically with a fixed owner
+# and mode -- never write through an existing path and change its
+# ownership/mode afterward.
+audit_key=/var/lib/unifimcp/audit-hmac.key
+if [ -L "$audit_key" ] || { [ -e "$audit_key" ] && [ ! -f "$audit_key" ]; }; then
+    die "$audit_key is not a regular file; refusing"
+fi
+if [ ! -e "$audit_key" ]; then
+    audit_key_tmp=$(mktemp)
+    if command -v openssl >/dev/null 2>&1; then
+        openssl rand -hex 32 > "$audit_key_tmp"
+    elif command -v head >/dev/null 2>&1 && [ -e /dev/urandom ]; then
+        head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$audit_key_tmp"
+    else
+        echo "    WARNING: cannot generate audit-hmac.key (no openssl or /dev/urandom)" >&2
+        echo "    WARNING: the server will generate it on first start" >&2
+    fi
+    if [ -s "$audit_key_tmp" ]; then
+        install -m 0600 -o unifimcp -g unifimcp "$audit_key_tmp" "$audit_key"
+    fi
+    rm -f "$audit_key_tmp"
 fi
 
 # Install systemd unit
