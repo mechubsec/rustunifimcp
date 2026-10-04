@@ -168,10 +168,22 @@ fi
 # tokens.json under /var/lib, never /etc — /etc/unifimcp is read-only to the
 # service under ProtectSystem=strict. This is the most repeated defect in the
 # fleet's backlog (junos#333, sdc#92, mist#42, proxmox#22).
-if [ ! -e /var/lib/unifimcp/tokens.json ]; then
-    printf '{"version":1,"tokens":[]}\n' > /var/lib/unifimcp/tokens.json
-    chown unifimcp:unifimcp /var/lib/unifimcp/tokens.json
-    chmod 0600 /var/lib/unifimcp/tokens.json
+#
+# /var/lib/unifimcp is 0700 owned by the unifimcp service account, so a
+# compromised service process could swap this path for a symlink to a
+# root-owned file before the next install/upgrade runs as root. Refuse
+# anything that isn't a plain regular file before touching it, and only
+# chown/chmod the file this run just created (via `install`, which creates
+# the destination directly rather than writing through an existing path).
+tokens_file=/var/lib/unifimcp/tokens.json
+if [ -L "$tokens_file" ] || { [ -e "$tokens_file" ] && [ ! -f "$tokens_file" ]; }; then
+    die "$tokens_file is not a regular file; refusing"
+fi
+if [ ! -e "$tokens_file" ]; then
+    tokens_tmp=$(mktemp)
+    printf '{"version":1,"tokens":[]}\n' > "$tokens_tmp"
+    install -m 0600 -o unifimcp -g unifimcp "$tokens_tmp" "$tokens_file"
+    rm -f "$tokens_tmp"
 else
     echo "    /var/lib/unifimcp/tokens.json exists; not overwriting"
 fi
