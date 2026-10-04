@@ -176,6 +176,26 @@ else
     echo "    /var/lib/unifimcp/tokens.json exists; not overwriting"
 fi
 
+# Generate the audit HMAC key if it does not exist. Do NOT regenerate on
+# upgrade -- a new key breaks verification of every prior record, the same
+# reasoning as rust-junosmcp's install.sh (#334). This LXC path previously
+# shipped unkeyed audit by default, same as the five container images
+# (mecmcp#376 / MEC-978) -- the gap just had no code here to key it with.
+if [ ! -e /var/lib/unifimcp/audit-hmac.key ]; then
+    if command -v openssl >/dev/null 2>&1; then
+        openssl rand -hex 32 > /var/lib/unifimcp/audit-hmac.key
+    elif command -v head >/dev/null 2>&1 && [ -e /dev/urandom ]; then
+        head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > /var/lib/unifimcp/audit-hmac.key
+    else
+        echo "    WARNING: cannot generate audit-hmac.key (no openssl or /dev/urandom)" >&2
+        echo "    WARNING: audit log will not be tamper-evident until the key is created" >&2
+    fi
+fi
+if [ -e /var/lib/unifimcp/audit-hmac.key ]; then
+    chown unifimcp:unifimcp /var/lib/unifimcp/audit-hmac.key
+    chmod 0600 /var/lib/unifimcp/audit-hmac.key
+fi
+
 # Install systemd unit
 if [ -f packaging/systemd/rustunifimcp.service ]; then
     echo "    Installing systemd unit..."
