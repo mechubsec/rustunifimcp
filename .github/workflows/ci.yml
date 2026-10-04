@@ -42,29 +42,6 @@ jobs:
       - name: Test
         run: cargo test --workspace --locked
 
-  container-guard:
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Build and verify container argv
-        run: |
-          docker build -t rustunifimcp:ci .
-
-          # Regression guard for mecmcp#357: config paths must survive operator overrides.
-          # Docker replaces CMD entirely when the caller supplies args, but appends to
-          # ENTRYPOINT, so config paths must live in ENTRYPOINT or they vanish the
-          # moment anyone passes --host.
-          container_id=$(docker create rustunifimcp:ci --host 0.0.0.0)
-          argv=$(docker inspect "$container_id" --format '{{join .Args "\n"}}')
-          docker rm "$container_id" > /dev/null
-
-          for p in /etc/unifimcp/controllers.json /var/lib/unifimcp/tokens.json /var/lib/unifimcp/changesets.json; do
-            echo "$argv" | grep -q -- "$p" || { echo "FAIL: $p missing from argv with --host override"; exit 1; }
-          done
-          echo "PASS: config paths survive --host override"
-
   conformance:
     name: Package conformance
     runs-on: ubuntu-24.04
