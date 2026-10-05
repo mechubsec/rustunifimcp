@@ -1,0 +1,25 @@
+binary     = "bin/rustunifimcp"
+installer  = "packaging/lxc/install.sh"
+service    = "rustunifimcp"
+config_dir = "/etc/unifimcp"
+tokens     = "/var/lib/unifimcp/tokens.json"
+
+# No supported skip-build path, so no honest BUILD-INFO is possible. R3 warns.
+# See mecmcp's spec, "Provenance ordering".
+build_info     = false
+skip_build_env = false
+
+units = ["packaging/systemd/rustunifimcp.service"]
+
+# --controllers-file, --tokens-file, and --state-file must survive an operator
+# CMD override because Docker replaces CMD wholesale but appends to ENTRYPOINT
+# (mecmcp#357). --audit-hmac-key-file closes the "5 of 6 server images run
+# unkeyed audit" gap (mecmcp#376 / MEC-978): the binary generates the key
+# itself on first run (#87) since this image is distroless with no shell for
+# a wrapper script, so the flag must stay in ENTRYPOINT the same way.
+must_survive_override = ["--controllers-file", "--tokens-file", "--state-file", "--audit-hmac-key-file"]
+
+[placeholders]
+UNIFIMCP_BIND_HOST = "0.0.0.0"
+UNIFIMCP_ALLOWED_HOST = "unifimcp.example.lan 192.0.2.10"
+UNIFIMCP_ALLOWED_ORIGIN = "https://unifimcp.example.lan"
