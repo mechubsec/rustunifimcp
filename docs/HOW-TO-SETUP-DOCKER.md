@@ -48,14 +48,21 @@ in the controllers file; it is referenced by `api_key_file`:
 
 ```json
 {
-    "unifi-demo": {
-        "url": "https://192.0.2.10:8443",
-        "site": "default",
-        "api_key_file": "/etc/unifimcp/api.key",
-        "skip_tls_verify": true
+    "version": 1,
+    "devices": {
+        "unifi-demo": {
+            "endpoint": "https://192.0.2.10:8443",
+            "site": "default",
+            "api_key_file": "/etc/unifimcp/api.key",
+            "allow_private_api": true
+        }
     }
 }
 ```
+
+The flat `{"<name>": {"url": ...}}` shape and `skip_tls_verify` are no longer
+accepted: the server exits with `inventory parse failed`. For a controller with
+a self-signed certificate, point `ca_pem_path` at its CA certificate instead.
 
 **`api_key_file` must be the in-container path**, not the host path. The file
 lives at `etc/api.key` on the host and is mounted to `/etc/unifimcp`.

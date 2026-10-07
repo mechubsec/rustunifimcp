@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.6.0] - 2026-10-07
 
+### Added
+
+- Official MCP Registry listing (`io.github.mechubsec/rustunifimcp`): the image
+  carries the `io.modelcontextprotocol.server.name` ownership label and the repo
+  ships `server.json` for the stdio Docker invocation, now documented in the
+  README.
+
+### Fixed
+
+- `docs/HOW-TO-SETUP-DOCKER.md` showed the retired flat `controllers.json` shape
+  (`url`, `skip_tls_verify`), which fails with `inventory parse failed`.
+
 ### Security
 
 - **Bumps the pinned mecmcp dependency to v0.27.0**, picking up an

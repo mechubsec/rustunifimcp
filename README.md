@@ -124,6 +124,35 @@ raw `.unf` file rather than JSON, which this server does not yet support.
 `restore` is refused permanently; restoring a backup overwrites the entire
 configuration, so it goes through the change-set lifecycle instead.
 
+## Run with Docker (stdio)
+
+The catalog-friendly stdio invocation replaces the image's HTTP `CMD` with
+`--transport stdio`. Put `controllers.json` (shape:
+[`packaging/examples/controllers.example.json`](packaging/examples/controllers.example.json))
+and the controller API key file in `etc/`, and give the container a writable
+`state/` directory for change sets and the audit HMAC key. Both must be owned
+by the image's UID/GID `65532:65532`, files at mode `0600`:
+
+```bash
+mkdir -p etc state
+# etc/controllers.json  -> "api_key_file": "/etc/unifimcp/api.key"
+# etc/api.key           -> the controller API key
+sudo chown -R 65532:65532 etc state
+sudo chmod 0700 etc state
+sudo chmod 0600 etc/controllers.json etc/api.key
+
+docker run --rm -i \
+  -v "$PWD/etc:/etc/unifimcp:ro" \
+  -v "$PWD/state:/var/lib/unifimcp" \
+  ghcr.io/mechubsec/rustunifimcp:latest \
+  --transport stdio
+```
+
+stdio carries no caller identity, so change-set approval and the direct-commit
+tools are refused; use the streamable-HTTP setup in
+[`docs/HOW-TO-SETUP-DOCKER.md`](docs/HOW-TO-SETUP-DOCKER.md) for two-person
+change control.
+
 ## Design highlights
 
 **Three API surfaces, each labelled.** UniFi's supported Integration API is far

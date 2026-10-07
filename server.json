@@ -1,0 +1,68 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.mechubsec/rustunifimcp",
+  "title": "rustunifimcp",
+  "description": "UniFi Network MCP server: scoped tools, audited two-person change control. Rust.",
+  "version": "0.6.0",
+  "websiteUrl": "https://mechub.org/projects/rustunifimcp/",
+  "repository": {
+    "url": "https://github.com/mechubsec/rustunifimcp",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "oci",
+      "identifier": "ghcr.io/mechubsec/rustunifimcp:0.6.0",
+      "runtimeHint": "docker",
+      "runtimeArguments": [
+        {
+          "type": "positional",
+          "value": "--rm",
+          "isRequired": true
+        },
+        {
+          "type": "positional",
+          "value": "-i",
+          "isRequired": true
+        },
+        {
+          "type": "named",
+          "name": "-v",
+          "value": "{config_dir}:/etc/unifimcp:ro",
+          "isRequired": true,
+          "variables": {
+            "config_dir": {
+              "description": "Absolute host directory with controllers.json and the controller API key file (owned by UID 65532, mode 0600)",
+              "format": "filepath",
+              "isRequired": true
+            }
+          }
+        },
+        {
+          "type": "named",
+          "name": "-v",
+          "value": "{state_dir}:/var/lib/unifimcp",
+          "isRequired": true,
+          "variables": {
+            "state_dir": {
+              "description": "Absolute host directory for persistent state (change sets, audit HMAC key); must be writable by UID 65532",
+              "format": "filepath",
+              "isRequired": true
+            }
+          }
+        }
+      ],
+      "packageArguments": [
+        {
+          "type": "named",
+          "name": "--transport",
+          "value": "stdio",
+          "isRequired": true
+        }
+      ],
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}
