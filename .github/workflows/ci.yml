@@ -61,11 +61,25 @@ jobs:
       - name: Build the release binary
         run: cargo build --release --locked --bin rustunifimcp
 
+      - name: Skip-build provenance
+        run: ./packaging/tests/skip-build-provenance.sh
+
+      - name: Installer provenance
+        run: ./packaging/tests/installer-provenance.sh
+
       - name: Stage the package
         run: |
           set -euo pipefail
+          UNIFIMCP_PACKAGE_SKIP_BUILD=1 ./scripts/package-lxc.sh
           mkdir -p staging/bin
-          cp target/release/rustunifimcp staging/bin/
+          mapfile -t archives < <(find dist -maxdepth 1 -type f -name 'rustunifimcp_*_*.tar.gz')
+          test "${#archives[@]}" -eq 1
+          extract=$(mktemp -d)
+          tar -xzf "${archives[0]}" -C "$extract"
+          mapfile -t roots < <(find "$extract" -mindepth 1 -maxdepth 1 -type d)
+          test "${#roots[@]}" -eq 1
+          install -m 0755 "${roots[0]}/rustunifimcp" staging/bin/rustunifimcp
+          cp "${roots[0]}/BUILD-INFO" staging/BUILD-INFO
           cp -r packaging staging/packaging
           cp packaging/conformance.toml staging/
 
@@ -88,3 +102,6 @@ jobs:
           staging: staging
           manifest: staging/conformance.toml
           image: rustunifimcp:ci
+          # The staged binary was compiled by the job's cargo step, then packed
+          # with UNIFIMCP_PACKAGE_SKIP_BUILD=1. R3 clause 3 must see that.
+          prebuilt: 'true'

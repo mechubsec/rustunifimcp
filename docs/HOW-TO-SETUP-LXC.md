@@ -59,33 +59,36 @@ then find the layer containing `usr/local/bin/rustunifimcp` and untar it.
 
 ## 2. Assemble the install package
 
-**This repo has no package-building script.** It is hand-assembled — a gap
-compared to `rustjunosmcp`, which ships `scripts/package-lxc.sh` with
-`JMCP_PACKAGE_SKIP_BUILD=1`.
-
-The package is a tarball with this layout, with the binary at the root:
-
-```
-rustunifimcp
-packaging/systemd/rustunifimcp.service
-packaging/systemd/rustunifimcp.sysusers
-packaging/systemd/rustunifimcp.tmpfiles
-packaging/examples/controllers.example.json
-packaging/lxc/install.sh
-```
-
-Build it with:
+Place the binary from the release image where the packager expects a prebuilt
+release binary, then pack it. `UNIFIMCP_PACKAGE_SKIP_BUILD=1` tells
+`scripts/package-lxc.sh` not to compile, and to record that fact in
+`BUILD-INFO` instead of naming a toolchain that did not produce the binary.
 
 ```bash
 cd /path/to/rustunifimcp
-mkdir -p /tmp/pkg-stage
-cp rustunifimcp /tmp/pkg-stage/
-cp -r packaging /tmp/pkg-stage/
-tar czf rustunifimcp_0.4.0.tar.gz -C /tmp/pkg-stage .
+mkdir -p target/release
+install -m 0755 rustunifimcp target/release/rustunifimcp
+UNIFIMCP_PACKAGE_SKIP_BUILD=1 ./scripts/package-lxc.sh
 ```
 
-The files land at the extraction root. The installer is `#!/bin/sh` and may not
-be executable in the archive, so invoke it as `sh packaging/lxc/install.sh`.
+The tarball lands in `dist/rustunifimcp_<version>_<arch>.tar.gz` (this tree
+produces `dist/rustunifimcp_0.5.0_amd64.tar.gz`). Its layout, under a single
+top-level directory `rustunifimcp_<version>_<arch>/`:
+
+```
+rustunifimcp_<version>_<arch>/
+  rustunifimcp
+  BUILD-INFO
+  packaging/systemd/rustunifimcp.service
+  packaging/systemd/rustunifimcp.sysusers
+  packaging/systemd/rustunifimcp.tmpfiles
+  packaging/examples/controllers.example.json
+  packaging/lxc/install.sh
+```
+
+`BUILD-INFO` records `binary_sha256` of that binary. The installer refuses a
+package whose record is missing or does not match. Invoke the installer as
+`sh packaging/lxc/install.sh` from inside that directory.
 
 ## 3. Create the container
 
@@ -111,8 +114,8 @@ guest as safe to destroy, and the fleet's own safety rules key on it.
 ## 4. Install
 
 ```bash
-pct push 622 rustunifimcp_0.4.0.tar.gz /tmp/pkg.tar.gz
-pct exec 622 -- bash -lc 'cd /tmp && tar xzf pkg.tar.gz && sh packaging/lxc/install.sh'
+pct push 622 dist/rustunifimcp_0.5.0_amd64.tar.gz /tmp/pkg.tar.gz
+pct exec 622 -- bash -lc 'rm -rf /tmp/unifimcp-pkg && mkdir /tmp/unifimcp-pkg && cd /tmp/unifimcp-pkg && tar xzf /tmp/pkg.tar.gz && cd rustunifimcp_*_* && sh packaging/lxc/install.sh'
 ```
 
 `install.sh` creates the `unifimcp` service user, installs the binary and the
