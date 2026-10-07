@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.6.0] - 2026-10-07
 
+### Changed
+
+- The container image is published for `linux/amd64` only; the `linux/arm64`
+  build (QEMU-emulated, and the slowest part of every release) is dropped.
+
 ### Added
 
 - Official MCP Registry listing (`io.github.mechubsec/rustunifimcp`): the image
