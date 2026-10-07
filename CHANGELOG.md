@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   published (checked on both GHCR and Docker Hub, and only on a confirmed
   "not found" response, so a registry error can't wave a republish through),
   serializes runs per tag so two overlapping workflow runs can't race each
-  other's check, and now also pushes a per-commit `sha-<short-sha>` image tag
+  other's check, and now also pushes a per-commit `sha-<full-sha>` image tag
   alongside each version tag, so the exact commit behind a published image
   stays traceable even if the workflow is re-run.
 

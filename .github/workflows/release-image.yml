@@ -125,7 +125,7 @@ jobs:
             echo "not tagging latest: newest stable is $LATEST_STABLE"
           fi
           echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "short_sha=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+          echo "sha=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
 
       - name: Refuse to republish an existing release tag
         # ghcr.io/<repo>:<version> is a moving tag: pushing to it again --
@@ -134,9 +134,15 @@ jobs:
         # signed git tag once pointed to, with no version bump or new tag to
         # signal it. Treat the first successful push of a given version as
         # final; any later content for this repo ships under a new version.
+        env:
+          # Passed through env instead of templated into the script text: a
+          # prerelease suffix only has its base validated above, so it can
+          # still carry shell metacharacters that a tag-push actor controls.
+          # Templating it straight into `run:` would make that text part of
+          # the script bash parses; env keeps it a plain string.
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
-          VERSION="${{ steps.version.outputs.version }}"
           for TAG in \
             "ghcr.io/${{ github.repository }}:${VERSION}" \
             "docker.io/mechub/rustunifimcp:${VERSION}"; do
@@ -165,7 +171,7 @@ jobs:
           push: true
           tags: |
             ghcr.io/${{ github.repository }}:${{ steps.version.outputs.version }}
-            ghcr.io/${{ github.repository }}:sha-${{ steps.version.outputs.short_sha }}
+            ghcr.io/${{ github.repository }}:sha-${{ steps.version.outputs.sha }}
             ${{ steps.version.outputs.is_latest == 'true' && format('ghcr.io/{0}:latest', github.repository) || '' }}
             docker.io/mechub/rustunifimcp:${{ steps.version.outputs.version }}
             ${{ steps.version.outputs.is_latest == 'true' && 'docker.io/mechub/rustunifimcp:latest' || '' }}
