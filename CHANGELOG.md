@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+## [0.5.0] - 2026-10-06
+
+### Security
+
+- **Hardens authorization and path-handling checks in the direct-commit ops
+  tools** (MEC-503, #54).
+- **Container and LXC/systemd installs now provision a keyed audit HMAC key
+  automatically on first run** (MEC-978, #87, #97). Both deployment paths
+  now provision and wire the key the same way.
+- **The shared CLI security options for approval digests and telemetry are
+  now honoured end to end** (#88): unusable configuration fails startup
+  instead of being silently accepted.
+
+### Changed
+
+- **Bumped the pinned `mecmcp` to v0.26.1** (MEC-1459). No call-site changes
+  were needed: this release's redaction fix is Junos-XML-specific and does
+  not touch any crate or call site this server uses.
 - **Bumped the pinned `mecmcp` to v0.26.0** (MEC-1235). No call-site changes
   were needed: `mecmcp-redact` gained `Profile` extension hooks and vendor
   JSON/XML profiles for other servers in this release, but this server's
