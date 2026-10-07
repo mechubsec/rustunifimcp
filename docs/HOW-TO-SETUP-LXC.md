@@ -59,14 +59,23 @@ then find the layer containing `usr/local/bin/rustunifimcp` and untar it.
 
 ## 2. Assemble the install package
 
-**This repo has no package-building script.** It is hand-assembled — a gap
-compared to `rustjunosmcp`, which ships `scripts/package-lxc.sh` with
-`JMCP_PACKAGE_SKIP_BUILD=1`.
+Place the binary from the release image where the packager expects a prebuilt
+release binary, then pack it. `UNIFIMCP_PACKAGE_SKIP_BUILD=1` tells
+`scripts/package-lxc.sh` not to compile, and to record that fact in
+`BUILD-INFO` instead of naming a toolchain that did not produce the binary.
 
-The package is a tarball with this layout, with the binary at the root:
+```bash
+cd /path/to/rustunifimcp
+mkdir -p target/release
+install -m 0755 rustunifimcp target/release/rustunifimcp
+UNIFIMCP_PACKAGE_SKIP_BUILD=1 ./scripts/package-lxc.sh
+```
+
+The tarball lands in `dist/`. Its layout, with the binary at the package root:
 
 ```
 rustunifimcp
+BUILD-INFO
 packaging/systemd/rustunifimcp.service
 packaging/systemd/rustunifimcp.sysusers
 packaging/systemd/rustunifimcp.tmpfiles
@@ -74,18 +83,9 @@ packaging/examples/controllers.example.json
 packaging/lxc/install.sh
 ```
 
-Build it with:
-
-```bash
-cd /path/to/rustunifimcp
-mkdir -p /tmp/pkg-stage
-cp rustunifimcp /tmp/pkg-stage/
-cp -r packaging /tmp/pkg-stage/
-tar czf rustunifimcp_0.4.0.tar.gz -C /tmp/pkg-stage .
-```
-
-The files land at the extraction root. The installer is `#!/bin/sh` and may not
-be executable in the archive, so invoke it as `sh packaging/lxc/install.sh`.
+`BUILD-INFO` records `binary_sha256` of that binary. The installer refuses a
+package whose record is missing or does not match. Invoke the installer as
+`sh packaging/lxc/install.sh` from the extraction root.
 
 ## 3. Create the container
 
@@ -111,7 +111,7 @@ guest as safe to destroy, and the fleet's own safety rules key on it.
 ## 4. Install
 
 ```bash
-pct push 622 rustunifimcp_0.4.0.tar.gz /tmp/pkg.tar.gz
+pct push 622 dist/rustunifimcp_*_*.tar.gz /tmp/pkg.tar.gz
 pct exec 622 -- bash -lc 'cd /tmp && tar xzf pkg.tar.gz && sh packaging/lxc/install.sh'
 ```
 

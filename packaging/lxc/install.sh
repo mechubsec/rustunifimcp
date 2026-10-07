@@ -7,6 +7,40 @@ die() {
     exit 1
 }
 
+# Refuse a package whose provenance record is missing or does not describe the
+# binary about to be installed. A compile-path record names its toolchain
+# (`rustc ...`). A binary this package script did not compile must say
+# `unknown (...)` instead of naming a workstation toolchain.
+verify_package_provenance() {
+    if [ ! -f BUILD-INFO ] || [ ! -s BUILD-INFO ]; then
+        die "package payload is missing BUILD-INFO"
+    fi
+    if [ ! -f rustunifimcp ] || [ ! -s rustunifimcp ] || [ ! -x rustunifimcp ]; then
+        die "package binary is missing or not executable"
+    fi
+    rustc_field=$(sed -n 's/^rustc=//p' BUILD-INFO | head -n 1)
+    case "$rustc_field" in
+        "rustc "*|"unknown ("*) ;;
+        *) die "BUILD-INFO rustc metadata is invalid" ;;
+    esac
+    recorded_sha=$(sed -n 's/^binary_sha256=//p' BUILD-INFO | head -n 1)
+    if ! printf '%s\n' "$recorded_sha" | grep -Eq '^[0-9a-f]{64}$'; then
+        die "BUILD-INFO binary_sha256 is invalid"
+    fi
+    actual_sha=$(sha256sum rustunifimcp | awk 'NR==1 { print $1; exit }')
+    if [ "$recorded_sha" != "$actual_sha" ]; then
+        die "BUILD-INFO binary_sha256 does not match the shipped binary"
+    fi
+}
+
+# Test hook. The check still runs; the installer then stops before it mutates
+# the host (users, packages, units).
+if [ "${UNIFIMCP_INSTALL_CHECK_PROVENANCE_ONLY:-0}" = 1 ]; then
+    verify_package_provenance
+    printf '%s\n' "provenance ok"
+    exit 0
+fi
+
 # Prove whether systemd's IPAddress* filters actually attach here, rather than
 # assuming the unit's declaration means anything. systemd implements them with
 # cgroup eBPF and FAILS OPEN when it cannot load the program -- typical in an
@@ -113,6 +147,10 @@ if [ "${ID:-}" != "debian" ] || [ "${VERSION_ID:-}" != "13" ]; then
     echo "error: this installer requires Debian 13 (detected: ${ID:-unknown} ${VERSION_ID:-unknown})" >&2
     exit 1
 fi
+
+# Before apt, users, or unit installation. A package we will not install
+# must leave the host alone.
+verify_package_provenance
 
 echo "==> Installing rustunifimcp"
 
