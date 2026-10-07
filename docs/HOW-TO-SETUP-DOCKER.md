@@ -168,11 +168,9 @@ gh attestation verify "oci://$image" --repo mechubsec/rustunifimcp \
 
 A failure in any of these checks means do not run it, not "probably fine."
 
-**Multi-arch:** the published manifest covers both `linux/amd64` and
-`linux/arm64` — `docker pull`/`docker run` resolve the matching platform
-automatically. `cosign verify` and `gh attestation verify` above check the
-manifest-list digest once; that one signature and one attestation cover both
-platform images underneath it.
+**Platform:** images are published for `linux/amd64` only (arm64 was dropped
+in 0.6.0). `cosign verify` and `gh attestation verify` above check the pushed
+image digest.
 
 ## 4. Run it — two-person mode
 
