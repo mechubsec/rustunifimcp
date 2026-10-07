@@ -63,6 +63,12 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Log in to Docker Hub
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
       - name: Extract version from tag and check it matches Cargo
         id: version
         run: |
@@ -121,6 +127,8 @@ jobs:
           tags: |
             ghcr.io/${{ github.repository }}:${{ steps.version.outputs.version }}
             ${{ steps.version.outputs.is_latest == 'true' && format('ghcr.io/{0}:latest', github.repository) || '' }}
+            docker.io/mechub/rustunifimcp:${{ steps.version.outputs.version }}
+            ${{ steps.version.outputs.is_latest == 'true' && 'docker.io/mechub/rustunifimcp:latest' || '' }}
           labels: |
             org.opencontainers.image.title=rustunifimcp
             org.opencontainers.image.description=UniFi Network MCP server
@@ -144,10 +152,25 @@ jobs:
           REPO: ${{ github.repository }}
           DIGEST: ${{ steps.build.outputs.digest }}
 
-      - name: Attest build provenance
+      - name: Sign image (keyless) -- Docker Hub
+        # Same digest as the GHCR signature above, but cosign writes the
+        # signature into whichever registry it's pointed at, so Docker Hub
+        # needs its own signing call even though it's the same image bits.
+        run: cosign sign --yes "docker.io/mechub/rustunifimcp@${DIGEST}"
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+
+      - name: Attest build provenance -- GHCR
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ghcr.io/${{ github.repository }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+      - name: Attest build provenance -- Docker Hub
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: docker.io/mechub/rustunifimcp
           subject-digest: ${{ steps.build.outputs.digest }}
           push-to-registry: true
 
@@ -159,10 +182,18 @@ jobs:
       # Binds the SBOM to the image digest as a signed attestation instead of
       # a plain workflow-run artifact, so it doesn't expire and travels with
       # the image rather than needing to be found separately.
-      - name: Attest SBOM
+      - name: Attest SBOM -- GHCR
         uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
         with:
           subject-name: ghcr.io/${{ github.repository }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          sbom-path: rustunifimcp/rustunifimcp.cdx.json
+          push-to-registry: true
+
+      - name: Attest SBOM -- Docker Hub
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-name: docker.io/mechub/rustunifimcp
           subject-digest: ${{ steps.build.outputs.digest }}
           sbom-path: rustunifimcp/rustunifimcp.cdx.json
           push-to-registry: true

@@ -7,24 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.6.0] - 2026-10-07
+## [0.6.1] - 2026-10-07
+
+### Added
+
+- The release image is also pushed to Docker Hub
+  (`docker.io/mechub/rustunifimcp`, `linux/amd64`), signed and attested the
+  same as the GHCR image.
+- Official MCP Registry listing (`io.github.mechubsec/rustunifimcp`): the image
+  carries the `io.modelcontextprotocol.server.name` ownership label and the repo
+  ships `server.json` for the stdio Docker invocation, now documented in the
+  README.
 
 ### Changed
 
 - The container image is published for `linux/amd64` only; the `linux/arm64`
   build (QEMU-emulated, and the slowest part of every release) is dropped.
 
-### Added
-
-- Official MCP Registry listing (`io.github.mechubsec/rustunifimcp`): the image
-  carries the `io.modelcontextprotocol.server.name` ownership label and the repo
-  ships `server.json` for the stdio Docker invocation, now documented in the
-  README.
-
 ### Fixed
 
 - `docs/HOW-TO-SETUP-DOCKER.md` showed the retired flat `controllers.json` shape
   (`url`, `skip_tls_verify`), which fails with `inventory parse failed`.
+
+## [0.6.0] - 2026-10-07
 
 ### Security
 
