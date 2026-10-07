@@ -5,6 +5,14 @@ on:
     tags:
       - 'v*.*.*'
 
+# The guard and the push are not atomic: two overlapping runs for the same
+# tag (a manual re-run racing the original) can both pass the guard before
+# either pushes, and the last one to finish wins. Serialize per ref instead
+# of cancelling an in-flight release push.
+concurrency:
+  group: release-image-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
   contents: read
   packages: write
@@ -128,12 +136,26 @@ jobs:
         # final; any later content for this repo ships under a new version.
         run: |
           set -euo pipefail
-          TAG="ghcr.io/${{ github.repository }}:${{ steps.version.outputs.version }}"
-          if docker buildx imagetools inspect "$TAG" >/dev/null 2>&1; then
-            echo "::error::$TAG was already published; cut a new version instead of republishing it" >&2
-            exit 1
-          fi
-          echo "$TAG not yet published, proceeding"
+          VERSION="${{ steps.version.outputs.version }}"
+          for TAG in \
+            "ghcr.io/${{ github.repository }}:${VERSION}" \
+            "docker.io/mechub/rustunifimcp:${VERSION}"; do
+            # A non-zero exit here is ambiguous: it covers both "the tag doesn't
+            # exist yet" and transient failures (registry 5xx, rate limit,
+            # network blip). Treating every non-zero exit as "not published"
+            # would let a flaky check wave the push through -- the exact
+            # overwrite this guard exists to stop. Only a confirmed "not
+            # found"/"manifest unknown" response counts as unpublished; any
+            # other error fails the job instead of guessing.
+            if out=$(docker buildx imagetools inspect "$TAG" 2>&1); then
+              echo "::error::$TAG was already published; cut a new version instead of republishing it" >&2
+              exit 1
+            elif ! grep -qiE 'not found|manifest unknown' <<<"$out"; then
+              echo "::error::could not determine whether $TAG exists: $out" >&2
+              exit 1
+            fi
+            echo "$TAG not yet published, proceeding"
+          done
 
       - name: Build and push Docker image
         id: build
