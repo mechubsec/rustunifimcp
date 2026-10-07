@@ -12,14 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Security
 
 - **Hardens authorization and path-handling checks in the direct-commit ops
-  tools** (MEC-503, #54): two tool paths now go through the same
-  path-expansion guard every other request in this crate already used,
-  closing a gap where a caller-supplied site parameter could reach the
-  controller unchecked.
+  tools** (MEC-503, #54).
 - **Container and LXC/systemd installs now provision a keyed audit HMAC key
-  automatically on first run** (MEC-978, #87, #97), closing a gap where a
-  fresh install could start with unkeyed audit by omission. Both deployment
-  paths now provision and wire the key the same way.
+  automatically on first run** (MEC-978, #87, #97). Both deployment paths
+  now provision and wire the key the same way.
 - **The shared CLI security options for approval digests and telemetry are
   now honoured end to end** (#88): unusable configuration fails startup
   instead of being silently accepted.
