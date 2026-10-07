@@ -63,6 +63,8 @@ LABEL org.opencontainers.image.title="rustunifimcp"
 LABEL org.opencontainers.image.description="UniFi Network MCP server"
 LABEL org.opencontainers.image.source="https://github.com/mechubsec/rustunifimcp"
 LABEL org.opencontainers.image.licenses="MIT"
+# Official MCP Registry ownership check: must equal server.json "name".
+LABEL io.modelcontextprotocol.server.name="io.github.mechubsec/rustunifimcp"
 
 # ENTRYPOINT carries what must always hold: config paths and anything security-
 # relevant. CMD carries only what an operator is expected to replace: bind
