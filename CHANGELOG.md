@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-07
+
+### Security
+
+- **Bumps the pinned mecmcp dependency to v0.27.0**, picking up an
+  authorization-check hardening fix for token-scope validation on the
+  direct-commit ops path.
+
 ### Changed
 
 - LXC packages record provenance for the packed binary, including when that
