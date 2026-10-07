@@ -473,13 +473,48 @@ impl UnifiServer {
         }
     }
 
+    /// The owner's identity binding, copied from the token when one is configured.
+    ///
+    /// Absent when the token has none. This server does not invent a binding,
+    /// and it does not drop one the token entry already carries.
+    fn owner_subject_of(
+        caller: Option<&mecmcp_auth::CallerCtx<UnifiGrant>>,
+    ) -> Option<mecmcp_changeset::OwnerSubject> {
+        let subject = caller.and_then(|ctx| ctx.oidc_subject.as_ref())?;
+        Some(mecmcp_changeset::OwnerSubject {
+            issuer: subject.issuer.clone(),
+            subject: subject.subject.clone(),
+        })
+    }
+
+    /// The approver identity the change-set coordinator judges.
+    ///
+    /// A verified assertion already on the caller wins. Otherwise the identity
+    /// is the token's declared actor type. `principal` is used only when there
+    /// is no caller context (stdio): that path is token-asserted and unknown,
+    /// never an invented human.
+    fn approver_identity(
+        caller: Option<&mecmcp_auth::CallerCtx<UnifiGrant>>,
+        principal: &str,
+    ) -> mecmcp_changeset::ApproverIdentity {
+        match caller {
+            Some(ctx) => mecmcp_changeset::ApproverIdentity::from_attribution(
+                &mecmcp_audit::Attribution::from_caller(ctx),
+            ),
+            None => mecmcp_changeset::ApproverIdentity::TokenAsserted {
+                principal: principal.to_owned(),
+                actor_type: Self::approver_actor_type(caller),
+            },
+        }
+    }
+
     /// Map a caller's server-verified `mecmcp_auth::ActorType` to the
-    /// `mecmcp_audit::ActorType` mecmcp's `approve_change_set` requires.
+    /// `mecmcp_audit::ActorType` the change-set approver identity carries.
     ///
     /// `None` -- no authenticated caller context, i.e. the stdio transport --
     /// maps to `Unknown` rather than `Human`. Inventing `Human` for an
     /// unattributed caller would let stdio silently satisfy the human-approver
-    /// gate; `Unknown` is the honest fact, and `approve_change_set` refuses it
+    /// gate; `Unknown` is the honest fact, and the coordinator refuses it
     /// exactly like it refuses `Agent`.
     fn approver_actor_type(
         caller: Option<&mecmcp_auth::CallerCtx<UnifiGrant>>,
@@ -1572,6 +1607,7 @@ impl UnifiServer {
             preview: None,
             task_id: None,
             apply_without_handle: false,
+            owner_subject: Self::owner_subject_of(caller.as_ref()),
         };
 
         let staged = match Self::with_plan(base, &mutations, &preimage, &description) {
@@ -1897,11 +1933,12 @@ impl UnifiServer {
         let _approving = self.plan_lock.lock().await;
 
         // Truthful, not permissive: a stdio caller carries no verified token
-        // entry, so its actor type is unknown rather than assumed human. mecmcp's
-        // `approve_change_set` refuses anything but `Human` (the house rule that
-        // a human approves), which is exactly the outcome an unattributed caller
-        // should get.
-        let approver_actor_type = Self::approver_actor_type(caller.as_ref());
+        // entry, so its actor type is unknown rather than assumed human. The
+        // coordinator refuses anything but a human approver (the house rule
+        // that a human approves), which is exactly the outcome an unattributed
+        // caller should get. A verified assertion is used only when the caller
+        // context already carries one.
+        let approver_identity = Self::approver_identity(caller.as_ref(), &approver);
 
         let outcome = if approver == record.owner {
             if !self.lab_mode {
@@ -1922,9 +1959,8 @@ impl UnifiServer {
                 .approve_change_set(
                     args.change_set_id.clone(),
                     args.controller.clone(),
-                    approver.clone(),
+                    &approver_identity,
                     record.digest.clone(),
-                    approver_actor_type,
                 )
                 .await
         };
@@ -2392,6 +2428,8 @@ mod tests {
             provider_tier: None,
             on_behalf_of: None,
             actor_type: mecmcp_auth::ActorType::Human,
+            oidc_subject: None,
+            verified_approver: None,
             client_name: None,
             model_id: None,
             session_id: None,
@@ -2661,6 +2699,8 @@ mod tests {
             provider_tier: None,
             on_behalf_of: None,
             actor_type: mecmcp_auth::ActorType::Agent,
+            oidc_subject: None,
+            verified_approver: None,
             client_name: None,
             model_id: None,
             session_id: None,
@@ -2685,6 +2725,8 @@ mod tests {
             provider_tier: None,
             on_behalf_of: None,
             actor_type: mecmcp_auth::ActorType::Human,
+            oidc_subject: None,
+            verified_approver: None,
             client_name: None,
             model_id: None,
             session_id: None,
@@ -2694,6 +2736,48 @@ mod tests {
             UnifiServer::approver_actor_type(Some(&caller)),
             mecmcp_audit::ActorType::Human
         );
+    }
+
+    /// No configured binding means none is recorded. A configured binding is
+    /// copied through, not dropped.
+    #[test]
+    fn owner_subject_follows_the_token_binding() {
+        let unbound = caller_with_tools(mecmcp_auth::ScopeSet::Wildcard);
+        assert!(UnifiServer::owner_subject_of(Some(&unbound)).is_none());
+        assert!(UnifiServer::owner_subject_of(None).is_none());
+
+        let mut bound = unbound;
+        bound.oidc_subject = Some(mecmcp_auth::OidcSubject {
+            issuer: "https://idp.example.test".to_owned(),
+            subject: "subject-1".to_owned(),
+        });
+        let copied = UnifiServer::owner_subject_of(Some(&bound)).expect("binding copied");
+        assert_eq!(copied.issuer, "https://idp.example.test");
+        assert_eq!(copied.subject, "subject-1");
+    }
+
+    /// With no verified assertion configured, approval stays on the token's
+    /// declared actor type. Stdio stays unknown.
+    #[test]
+    fn approver_identity_stays_token_asserted_without_a_configured_assertion() {
+        let caller = caller_with_tools(mecmcp_auth::ScopeSet::Wildcard);
+        let identity = UnifiServer::approver_identity(Some(&caller), "ignored");
+        assert!(matches!(
+            identity,
+            mecmcp_changeset::ApproverIdentity::TokenAsserted {
+                ref principal,
+                actor_type,
+            } if principal == "caller" && actor_type == mecmcp_audit::ActorType::Human
+        ));
+
+        let stdio = UnifiServer::approver_identity(None, "unknown");
+        assert!(matches!(
+            stdio,
+            mecmcp_changeset::ApproverIdentity::TokenAsserted {
+                ref principal,
+                actor_type,
+            } if principal == "unknown" && actor_type == mecmcp_audit::ActorType::Unknown
+        ));
     }
 
     /// The router and the registry must agree, in both directions.
@@ -2741,6 +2825,15 @@ mod tests {
         // Both directions pass — the sets are equal.
     }
 
+    /// A human approver known only by token name. Tests do not configure an
+    /// assertion, so this is the identity the coordinator accepts.
+    fn human_approver(principal: &str) -> mecmcp_changeset::ApproverIdentity {
+        mecmcp_changeset::ApproverIdentity::TokenAsserted {
+            principal: principal.to_owned(),
+            actor_type: mecmcp_audit::ActorType::Human,
+        }
+    }
+
     /// Build a `Planned` record the way `unifi_create_change_set` does.
     fn planned_record(owner: &str, controller: &str, ttl: u64) -> ChangeSetRecord {
         let record = ChangeSetRecord {
@@ -2760,6 +2853,7 @@ mod tests {
             preview: None,
             task_id: None,
             apply_without_handle: false,
+            owner_subject: None,
         };
         let staged = vec![StagedMutation::create(
             "firewall_policy",
@@ -2803,6 +2897,10 @@ mod tests {
             .expect("the record must survive the restart");
         assert_eq!(record.owner, "alice");
         assert_eq!(record.state, ChangeSetState::Planned);
+        assert!(
+            record.owner_subject.is_none(),
+            "a plan with no configured binding must not gain one across a restart"
+        );
         assert!(
             record.preview.is_some(),
             "the preview an approver reads must survive too"
@@ -2901,9 +2999,8 @@ mod tests {
             .approve_change_set(
                 id.clone(),
                 "home".to_owned(),
-                "bob".to_owned(),
+                &human_approver("bob"),
                 digest,
-                mecmcp_audit::ActorType::Human,
             )
             .await
             .expect("a second principal approves");
@@ -2939,9 +3036,8 @@ mod tests {
                 .approve_change_set(
                     id.clone(),
                     "home".to_owned(),
-                    "bob".to_owned(),
+                    &human_approver("bob"),
                     digest,
-                    mecmcp_audit::ActorType::Human
                 )
                 .await
                 .is_err(),
@@ -3031,9 +3127,8 @@ mod tests {
             .approve_change_set(
                 id.clone(),
                 "home".to_owned(),
-                "bob".to_owned(),
+                &human_approver("bob"),
                 digest,
-                mecmcp_audit::ActorType::Human,
             )
             .await
             .expect("approved inside the window");
@@ -3120,9 +3215,8 @@ mod tests {
             .approve_change_set(
                 id.clone(),
                 "home".to_owned(),
-                "bob".to_owned(),
+                &human_approver("bob"),
                 digest,
-                mecmcp_audit::ActorType::Human,
             )
             .await
             .expect("approve");
@@ -3266,6 +3360,7 @@ mod tests {
             preview: None,
             task_id: None,
             apply_without_handle: false,
+            owner_subject: None,
         };
         let staged = vec![StagedMutation::update(
             "device",
@@ -3341,9 +3436,8 @@ mod tests {
             .approve_change_set(
                 id.clone(),
                 "home".to_owned(),
-                "bob".to_owned(),
+                &human_approver("bob"),
                 digest,
-                mecmcp_audit::ActorType::Human,
             )
             .await
             .expect("a second principal approves");

@@ -112,9 +112,9 @@ pub fn build_coordinator(
         refuse_legacy_state_file(path, contents.as_deref())?;
     }
 
-    // `load_with_key` verifies any on-disk v6 approval digest against the key
-    // and stores it on the returned coordinator for future signs; it must not
-    // also be passed to `with_approval_digest_key` afterwards, or the two
+    // `load_with_key` verifies any on-disk keyed approval digest against the
+    // key and stores it on the returned coordinator for future signs; it must
+    // not also be passed to `with_approval_digest_key` afterwards, or the two
     // copies could drift.
     let mut coordinator = ChangesetCoordinator::load_with_key(
         absolute.as_deref(),
@@ -336,6 +336,7 @@ mod tests {
                 preview: None,
                 task_id: None,
                 apply_without_handle: false,
+                owner_subject: None,
             };
             coordinator
                 .insert_change_set(record)
@@ -445,9 +446,9 @@ mod tests {
     }
 
     /// A coordinator built with a key via `build_coordinator` produces the
-    /// keyed v6 approval digest, not the unkeyed v5 one.
+    /// current keyed approval digest, not the unkeyed v5 one.
     #[tokio::test]
-    async fn an_approval_digest_key_passed_to_build_coordinator_produces_a_v6_digest() {
+    async fn an_approval_digest_key_passed_to_build_coordinator_produces_a_keyed_digest() {
         let dir = tempfile::tempdir().expect("tempdir");
         let state_path = dir.path().join("changeset-state.json");
         let key = b"a-sufficiently-long-test-key".as_slice();
@@ -468,16 +469,20 @@ mod tests {
                 "alice".to_string(),
                 format!("sha256:{}", "0".repeat(64)),
                 "policy-sig".to_string(),
+                None,
             )
             .await
             .expect("create");
+        let bob = mecmcp_changeset::ApproverIdentity::TokenAsserted {
+            principal: "bob".to_owned(),
+            actor_type: mecmcp_audit::ActorType::Human,
+        };
         coordinator
             .approve_change_set(
                 created.change_set_id.clone(),
                 "home".to_string(),
-                "bob".to_string(),
+                &bob,
                 created.digest.clone(),
-                mecmcp_audit::ActorType::Human,
             )
             .await
             .expect("approve");
@@ -493,9 +498,9 @@ mod tests {
             .as_ref()
             .expect("approval");
         assert_eq!(
-            approval.digest_version, 6,
-            "a key passed through build_coordinator must produce a v6 (keyed) digest, not the \
-             unkeyed v5 one"
+            approval.digest_version, 7,
+            "a key passed through build_coordinator must produce the current keyed digest, not \
+             the unkeyed v5 one"
         );
 
         drop(coordinator);
@@ -506,7 +511,7 @@ mod tests {
         );
         assert!(
             unkeyed_read.is_err(),
-            "a v6 digest produced through build_coordinator must not verify without the key"
+            "a keyed digest produced through build_coordinator must not verify without the key"
         );
     }
 }
