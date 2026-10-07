@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - LXC packages record provenance for the packed binary, including when that
   binary is supplied prebuilt (`UNIFIMCP_PACKAGE_SKIP_BUILD=1`). The installer
   refuses a package whose record is missing or does not match the binary.
+- The LXC setup guide extracts that package under its top-level directory and
+  runs the installer from inside it.
 
 ## [0.5.0] - 2026-10-06
 
