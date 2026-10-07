@@ -7,8 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-07
+
+### Security
+
+- **Bumps the pinned mecmcp dependency to v0.27.0**, picking up an
+  authorization-check hardening fix for token-scope validation on the
+  direct-commit ops path.
+
 ### Changed
 
+- Adapted change-set callers to the mecmcp v0.27.0 lifecycle API. A caller
+  with no configured identity binding still proposes and approves under the
+  token's declared actor type; no binding is invented.
 - LXC packages record provenance for the packed binary, including when that
   binary is supplied prebuilt (`UNIFIMCP_PACKAGE_SKIP_BUILD=1`). The installer
   refuses a package whose record is missing or does not match the binary.

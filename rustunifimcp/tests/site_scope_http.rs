@@ -84,6 +84,7 @@ fn mint_token(path: &std::path::Path, name: &str, sites: Option<Vec<String>>) ->
         None,
         None,
         None,
+        None,
         &known,
     )
     .expect("mint token");

@@ -117,6 +117,8 @@ fn token_command_to_action(command: TokenCommand) -> Result<(TokenAction, Option
             provider_tier,
             on_behalf_of,
             actor_type,
+            oidc_issuer,
+            oidc_subject,
             allow_self_approval: _,
             sites,
             server_pid,
@@ -132,6 +134,8 @@ fn token_command_to_action(command: TokenCommand) -> Result<(TokenAction, Option
                     provider_tier,
                     on_behalf_of,
                     actor_type,
+                    oidc_issuer,
+                    oidc_subject,
                     server_pid,
                 },
                 grant,
@@ -1135,8 +1139,8 @@ mod tests {
     }
 
     /// A valid key file is loaded and passed through to the coordinator,
-    /// producing the keyed v6 approval digest rather than the unkeyed v5
-    /// one.
+    /// producing the current keyed approval digest rather than the unkeyed
+    /// v5 one.
     #[test]
     fn a_valid_approval_digest_key_file_is_loaded() {
         let dir = tempfile::tempdir().unwrap();
@@ -1250,6 +1254,8 @@ mod tests {
             provider_tier: None,
             on_behalf_of: None,
             actor_type: None,
+            oidc_issuer: None,
+            oidc_subject: None,
             allow_self_approval: false,
             sites: None,
             server_pid: None,
@@ -1258,7 +1264,16 @@ mod tests {
         let (action, grant) = token_command_to_action(command).expect("converts");
         assert!(grant.is_none());
         match action {
-            TokenAction::Add { name, .. } => assert_eq!(name, "test"),
+            TokenAction::Add {
+                name,
+                oidc_issuer,
+                oidc_subject,
+                ..
+            } => {
+                assert_eq!(name, "test");
+                assert!(oidc_issuer.is_none());
+                assert!(oidc_subject.is_none());
+            }
             _ => panic!("expected TokenAction::Add"),
         }
     }
@@ -1279,6 +1294,8 @@ mod tests {
             provider_tier: None,
             on_behalf_of: None,
             actor_type: None,
+            oidc_issuer: None,
+            oidc_subject: None,
             allow_self_approval: false,
             sites: Some(vec!["site-a".to_string(), "site-b".to_string()]),
             server_pid: None,
@@ -1307,6 +1324,8 @@ mod tests {
             provider_tier: None,
             on_behalf_of: None,
             actor_type: None,
+            oidc_issuer: None,
+            oidc_subject: None,
             allow_self_approval: false,
             sites: Some(vec!["*".to_string()]),
             server_pid: None,
@@ -1332,6 +1351,8 @@ mod tests {
             provider_tier: None,
             on_behalf_of: None,
             actor_type: None,
+            oidc_issuer: None,
+            oidc_subject: None,
             allow_self_approval: false,
             sites: Some(vec!["*".to_string(), "site-a".to_string()]),
             server_pid: None,

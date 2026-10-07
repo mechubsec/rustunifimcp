@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 /// Reported by `unifimcp_status`. Must track the `tag = "vX.Y.Z"` on every
 /// `mecmcp-*` dependency in the workspace `Cargo.toml` — the regression test
 /// `mecmcp_version_tracks_the_workspace_pin` enforces this.
-const MECMCP_VERSION: &str = "0.26.1";
+const MECMCP_VERSION: &str = "0.27.0";
 
 /// Build a redacted view of one controller for list_controllers.
 ///

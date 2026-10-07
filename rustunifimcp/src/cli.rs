@@ -240,6 +240,14 @@ pub enum TokenCommand {
         /// Actor type: "human", "agent", or "unknown". Optional.
         #[arg(long)]
         actor_type: Option<String>,
+        /// IdP issuer URL this token is bound to. Optional. Set together with
+        /// `--oidc-subject`, or omit both.
+        #[arg(long)]
+        oidc_issuer: Option<String>,
+        /// IdP subject this token is bound to. Optional. Set together with
+        /// `--oidc-issuer`, or omit both.
+        #[arg(long)]
+        oidc_subject: Option<String>,
         /// Allow one token to hold both `unifi_stage_change` and
         /// `unifi_approve_change_set`. Only meaningful for a server run with
         /// `--lab-mode`; without it the server refuses such a token at call time.
