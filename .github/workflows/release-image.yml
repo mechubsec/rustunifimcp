@@ -111,6 +111,23 @@ jobs:
             echo "not tagging latest: newest stable is $LATEST_STABLE"
           fi
           echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "short_sha=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Refuse to republish an existing release tag
+        # ghcr.io/<repo>:<version> is a moving tag: pushing to it again --
+        # whether from a re-run of this workflow or a second tag push that
+        # resolves to the same version -- would silently replace the image a
+        # signed git tag once pointed to, with no version bump or new tag to
+        # signal it. Treat the first successful push of a given version as
+        # final; any later content for this repo ships under a new version.
+        run: |
+          set -euo pipefail
+          TAG="ghcr.io/${{ github.repository }}:${{ steps.version.outputs.version }}"
+          if docker buildx imagetools inspect "$TAG" >/dev/null 2>&1; then
+            echo "::error::$TAG was already published; cut a new version instead of republishing it" >&2
+            exit 1
+          fi
+          echo "$TAG not yet published, proceeding"
 
       - name: Build and push Docker image
         id: build
@@ -120,6 +137,7 @@ jobs:
           push: true
           tags: |
             ghcr.io/${{ github.repository }}:${{ steps.version.outputs.version }}
+            ghcr.io/${{ github.repository }}:sha-${{ steps.version.outputs.short_sha }}
             ${{ steps.version.outputs.is_latest == 'true' && format('ghcr.io/{0}:latest', github.repository) || '' }}
           labels: |
             org.opencontainers.image.title=rustunifimcp
