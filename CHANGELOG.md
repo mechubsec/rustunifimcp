@@ -25,7 +25,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Bumped the pinned `mecmcp` to v0.26.1** (MEC-1459). No call-site changes
   were needed: this release's redaction fix is Junos-XML-specific and does
   not touch any crate or call site this server uses.
-
 - **Bumped the pinned `mecmcp` to v0.26.0** (MEC-1235). No call-site changes
   were needed: `mecmcp-redact` gained `Profile` extension hooks and vendor
   JSON/XML profiles for other servers in this release, but this server's
