@@ -10,6 +10,8 @@
 <p align="center"><strong>Enterprise MCP server for UniFi Network — curated tools, scoped access, audited change control</strong><br>
 <em>a mechub project — sovereign network-security automation</em></p>
 
+> **Unofficial / community project.** This is an independent community project and does not claim affiliation with or endorsement by Ubiquiti Inc. Product names and trademarks are used only to identify the systems with which the software interoperates.
+
 ---
 
 `rustunifimcp` is the UniFi Network member of the mechub MCP server family. It
