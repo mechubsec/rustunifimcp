@@ -12,10 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Startup checks credential-file modes in one pass, using the shared layout
   for this server. On-disk paths are unchanged: the controller inventory
   stays `/etc/unifimcp/controllers.json` and the bearer store stays
-  `/var/lib/unifimcp/tokens.json`. The inventory is checked as configuration
-  when it holds no secret; an API key file, the bearer store, and the audit
-  HMAC key are checked as secrets. A missing optional API key file does not
-  fail a fresh install.
+  `/var/lib/unifimcp/tokens.json`. The inventory is checked as owner-only.
+  An API key file, the bearer store, and the audit HMAC key are checked as
+  secrets. A missing optional API key file does not fail a fresh install.
 - The release workflow refuses to push to a version tag that was already
   published (checked on both GHCR and Docker Hub, and only on a confirmed
   "not found" response, so a registry error can't wave a republish through),

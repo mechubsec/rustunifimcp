@@ -377,8 +377,8 @@ fn listener_tokens(cli: &UnifiCli) -> Option<&Path> {
 /// on the next restart. [`validate_startup_credentials`] asks `mecmcp-secret`
 /// to report every offender in this list at once.
 struct StartupCredentialFiles<'a> {
-    /// Controller inventory. Required. Checked as configuration when the
-    /// document holds no secret, and as a secret otherwise.
+    /// Controller inventory. Required. Checked as owner-only, the same
+    /// ceiling the inventory loader enforces.
     controllers: &'a Path,
     /// Bearer-token store this process will load. Required when set. Never
     /// resolved through an `/etc` fallback: this server shipped the
@@ -405,7 +405,7 @@ fn validate_startup_credentials(files: &StartupCredentialFiles<'_>) -> Result<()
     let mut specs = Vec::with_capacity(4 + inspected.api_key_files.len());
     specs.push(CredentialFileSpec {
         path: files.controllers,
-        role: inspected.role,
+        role: CredentialFileRole::Secret,
         description: "controller inventory",
         required: true,
     });
@@ -446,134 +446,45 @@ fn validate_startup_credentials(files: &StartupCredentialFiles<'_>) -> Result<()
     Ok(())
 }
 
-/// Role and API-key paths read from one inventory file.
+/// API-key paths read from one inventory file.
 struct InspectedControllers {
-    role: CredentialFileRole,
     api_key_files: Vec<PathBuf>,
 }
 
-/// Classify `controllers.json` and collect the API key paths it names.
+/// Collect the API key paths `controllers.json` names.
 ///
-/// A missing, unreadable, or empty file is configuration: the required-file
-/// check reports absence, and an empty file is not secret material. A
-/// non-empty document that does not parse, or that holds a secret, is a
-/// secret. `api_key_file` values are still collected from a document that
-/// parses, including one that also holds a secret.
+/// A missing, unreadable, oversized, or unparseable file yields no paths.
+/// The inventory itself is still checked as owner-only by the caller.
 fn inspect_controllers(path: &Path) -> InspectedControllers {
     let limit = mecmcp_secret::FileLimits::default().max_bytes;
     let bytes = match std::fs::metadata(path) {
         Ok(metadata) if metadata.len() > u64::try_from(limit).unwrap_or(u64::MAX) => {
             return InspectedControllers {
-                role: CredentialFileRole::Secret,
                 api_key_files: Vec::new(),
             };
         }
         Ok(_) => match std::fs::read(path) {
             Ok(bytes) if bytes.len() <= limit => bytes,
-            Ok(_) => {
+            _ => {
                 return InspectedControllers {
-                    role: CredentialFileRole::Secret,
-                    api_key_files: Vec::new(),
-                };
-            }
-            Err(_) => {
-                return InspectedControllers {
-                    role: CredentialFileRole::ConfigNoSecret,
                     api_key_files: Vec::new(),
                 };
             }
         },
         Err(_) => {
             return InspectedControllers {
-                role: CredentialFileRole::ConfigNoSecret,
                 api_key_files: Vec::new(),
             };
         }
     };
-    if bytes.iter().all(|byte| byte.is_ascii_whitespace()) {
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
         return InspectedControllers {
-            role: CredentialFileRole::ConfigNoSecret,
             api_key_files: Vec::new(),
         };
-    }
-    let value: serde_json::Value = match serde_json::from_slice(&bytes) {
-        Ok(value) => value,
-        Err(_) => {
-            return InspectedControllers {
-                role: CredentialFileRole::Secret,
-                api_key_files: Vec::new(),
-            };
-        }
     };
     let mut api_key_files = Vec::new();
     collect_api_key_files(&value, &mut api_key_files);
-    let role = if document_holds_secret(&value) {
-        CredentialFileRole::Secret
-    } else {
-        CredentialFileRole::ConfigNoSecret
-    };
-    InspectedControllers {
-        role,
-        api_key_files,
-    }
-}
-
-/// Keys whose presence means the inventory itself holds a secret.
-///
-/// Names that only point at a secret (`*_file`, `*_env`, `*_path`) are not
-/// in this list.
-const SECRET_KEYS: &[&str] = &[
-    "api_key",
-    "api_token",
-    "community",
-    "passphrase",
-    "password",
-    "private_key",
-    "psk",
-    "secret",
-    "token",
-];
-
-fn key_names_a_secret(key: &str) -> bool {
-    let key = key.to_ascii_lowercase();
-    if key.ends_with("_file") || key.ends_with("_env") || key.ends_with("_path") {
-        return false;
-    }
-    SECRET_KEYS.contains(&key.as_str())
-}
-
-fn value_is_secret_material(value: &serde_json::Value) -> bool {
-    match value {
-        serde_json::Value::Null => false,
-        serde_json::Value::String(text) => !text.trim().is_empty(),
-        serde_json::Value::Array(items) => items.iter().any(value_is_secret_material),
-        serde_json::Value::Object(map) => map.values().any(value_is_secret_material),
-        serde_json::Value::Number(_) | serde_json::Value::Bool(_) => true,
-    }
-}
-
-/// `scheme://userinfo@host` anywhere in `value`.
-fn string_holds_userinfo(value: &str) -> bool {
-    let Some((_, rest)) = value.split_once("://") else {
-        return false;
-    };
-    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
-    let Some((userinfo, host)) = authority.rsplit_once('@') else {
-        return false;
-    };
-    !userinfo.is_empty() && !host.is_empty()
-}
-
-fn document_holds_secret(value: &serde_json::Value) -> bool {
-    match value {
-        serde_json::Value::Object(map) => map.iter().any(|(key, child)| {
-            (key_names_a_secret(key) && value_is_secret_material(child))
-                || document_holds_secret(child)
-        }),
-        serde_json::Value::Array(items) => items.iter().any(document_holds_secret),
-        serde_json::Value::String(text) => string_holds_userinfo(text),
-        _ => false,
-    }
+    InspectedControllers { api_key_files }
 }
 
 fn collect_api_key_files(value: &serde_json::Value, found: &mut Vec<PathBuf>) {
@@ -2173,15 +2084,14 @@ mod startup_credential_tests {
         assert!(message.contains("0640"), "{message}");
     }
 
-    /// `0600` is inside the `0640` ceiling for a no-secret inventory, and a
-    /// `0600` token store is the secret role. Both must pass together with
-    /// the API key file.
+    /// An owner-only inventory, an owner-only token store, and an owner-only
+    /// API key file must pass together.
     #[test]
     fn acceptable_modes_pass_in_one_pass() {
         let dir = tempfile::tempdir().unwrap();
         let api_key = write_file(dir.path(), "api.key", b"key\n", 0o600);
         let inventory = no_secret_inventory(&api_key);
-        let controllers = write_file(dir.path(), "controllers.json", inventory.as_bytes(), 0o640);
+        let controllers = write_file(dir.path(), "controllers.json", inventory.as_bytes(), 0o600);
         let tokens = write_file(dir.path(), "tokens.json", b"{}\n", 0o600);
 
         validate_startup_credentials(&StartupCredentialFiles {
@@ -2190,11 +2100,43 @@ mod startup_credential_tests {
             audit_hmac_key: None,
             approval_digest_key: None,
         })
-        .expect("0640 inventory, 0600 api key, and 0600 tokens are acceptable modes");
+        .expect("0600 inventory, api key, and tokens are acceptable modes");
     }
 
-    /// A locked-down inventory (`0600`) is stricter than `0640` and must
-    /// still pass. A missing optional API key file is not a failure.
+    /// A group-readable inventory is the same failure as a group-readable
+    /// token store. Both must be named in one error.
+    #[test]
+    fn group_readable_inventory_and_tokens_fail_together() {
+        let dir = tempfile::tempdir().unwrap();
+        let api_key = write_file(dir.path(), "api.key", b"key\n", 0o600);
+        let inventory = no_secret_inventory(&api_key);
+        let controllers = write_file(dir.path(), "controllers.json", inventory.as_bytes(), 0o640);
+        let tokens = write_file(dir.path(), "tokens.json", b"{}\n", 0o640);
+
+        let error = validate_startup_credentials(&StartupCredentialFiles {
+            controllers: &controllers,
+            tokens: Some(&tokens),
+            audit_hmac_key: None,
+            approval_digest_key: None,
+        })
+        .expect_err("0640 is too loose for the inventory and the token store");
+
+        let message = error.to_string();
+        assert!(
+            message.contains("2 credential file"),
+            "expected both failures in one error, got {message}"
+        );
+        assert!(message.contains("controllers.json"), "{message}");
+        assert!(message.contains("tokens.json"), "{message}");
+        assert!(message.contains("0640"), "{message}");
+        assert!(
+            !message.contains("api.key"),
+            "an owner-only API key must not be named, got {message}"
+        );
+    }
+
+    /// An owner-only inventory passes. A missing optional API key file is
+    /// not a failure.
     #[test]
     fn owner_only_inventory_and_missing_optional_file_pass() {
         let dir = tempfile::tempdir().unwrap();
@@ -2212,13 +2154,13 @@ mod startup_credential_tests {
     }
 
     /// The API key file holds the credential, so group-read is a failure
-    /// even when the inventory next to it is an acceptable `0640`.
+    /// even when the inventory next to it is owner-only.
     #[test]
     fn loose_api_key_is_a_secret() {
         let dir = tempfile::tempdir().unwrap();
         let api_key = write_file(dir.path(), "api.key", b"key\n", 0o640);
         let inventory = no_secret_inventory(&api_key);
-        let controllers = write_file(dir.path(), "controllers.json", inventory.as_bytes(), 0o640);
+        let controllers = write_file(dir.path(), "controllers.json", inventory.as_bytes(), 0o600);
 
         let error = validate_startup_credentials(&StartupCredentialFiles {
             controllers: &controllers,
@@ -2233,48 +2175,8 @@ mod startup_credential_tests {
         assert!(message.contains("0600"), "{message}");
         assert!(
             !message.contains("controllers.json"),
-            "an acceptable inventory must not be named, got {message}"
+            "an owner-only inventory must not be named, got {message}"
         );
-    }
-
-    /// An inline API key makes the inventory itself a secret, so `0640` fails.
-    #[test]
-    fn inline_api_key_at_group_read_is_a_secret() {
-        let dir = tempfile::tempdir().unwrap();
-        let body = br#"{"devices":{"home":{"endpoint":"https://unifi.example.org","site":"default","api_key":"inline"}}}"#;
-        let controllers = write_file(dir.path(), "controllers.json", body, 0o640);
-
-        let error = validate_startup_credentials(&StartupCredentialFiles {
-            controllers: &controllers,
-            tokens: None,
-            audit_hmac_key: None,
-            approval_digest_key: None,
-        })
-        .expect_err("an inline api key is secret material");
-
-        let message = error.to_string();
-        assert!(message.contains("controllers.json"), "{message}");
-        assert!(message.contains("0600"), "{message}");
-    }
-
-    /// Userinfo in an endpoint is secret material in the inventory file.
-    #[test]
-    fn endpoint_userinfo_at_group_read_is_a_secret() {
-        let dir = tempfile::tempdir().unwrap();
-        let body = br#"{"devices":{"home":{"endpoint":"https://user:pass@unifi.example.org","site":"default","api_key_env":"UNIFI_API_KEY"}}}"#;
-        let controllers = write_file(dir.path(), "controllers.json", body, 0o640);
-
-        let error = validate_startup_credentials(&StartupCredentialFiles {
-            controllers: &controllers,
-            tokens: None,
-            audit_hmac_key: None,
-            approval_digest_key: None,
-        })
-        .expect_err("endpoint userinfo is secret material");
-
-        let message = error.to_string();
-        assert!(message.contains("controllers.json"), "{message}");
-        assert!(message.contains("0600"), "{message}");
     }
 
     /// A required token path that is missing is named. No second path is tried.
