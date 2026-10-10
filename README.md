@@ -10,6 +10,8 @@
 <p align="center"><strong>Enterprise MCP server for UniFi Network — curated tools, scoped access, audited change control</strong><br>
 <em>a mechub project — sovereign network-security automation</em></p>
 
+> **Unofficial / community project.** This is an independent community project and does not claim affiliation with or endorsement by Ubiquiti Inc. Product names and trademarks are used only to identify the systems with which the software interoperates.
+
 ---
 
 `rustunifimcp` is the UniFi Network member of the mechub MCP server family. It
@@ -33,9 +35,9 @@ configuration and nothing else, which makes it the real test of whether
 
 ## Status
 
-**In production. The dependency on the legacy server is retired.**
+**In daily use on the maintainer's infrastructure (alpha). The dependency on the legacy server is retired.**
 
-`rustunifimcp` v0.5.0 serves the full surface — reads, workflows, operational
+`rustunifimcp` v0.6.1 serves the full surface — reads, workflows, operational
 actions, and change control — from LXC 981 over TLS, under two-person control.
 The `unifi-mcp-legacy` registration is gone; nothing routes to the Python
 server any more.
@@ -48,7 +50,7 @@ separate decision for its owner.
 
 | Guest | Role | Endpoint |
 |---|---|---|
-| 981 `prod-unifimcp` | production, two-person, TLS | `https://prod-unifimcp.example.org:30033/mcp` |
+| 981 `prod-unifimcp` | daily-use lab guest, two-person, TLS | `https://prod-unifimcp.example.org:30033/mcp` |
 | 622 `test-twoperson-unifi` | rig, two-person | `http://test-twoperson-unifi.example.org:30033/mcp` |
 | 623 `test-labmode-unifi` | rig, `--lab-mode` | `http://test-labmode-unifi.example.org:30033/mcp` |
 
