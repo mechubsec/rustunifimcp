@@ -11,6 +11,17 @@
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
+/// Default controller inventory.
+///
+/// Derived from `ServerNaming` for the deployed UniFi short name. The
+/// on-disk path stays `/etc/unifimcp/controllers.json`.
+#[must_use]
+pub fn default_controllers_file() -> PathBuf {
+    mecmcp_secret::naming::ServerNaming::derive(mecmcp_secret::naming::known::UNIFI)
+        .config_dir
+        .join("controllers.json")
+}
+
 /// `rustunifimcp` command line.
 #[derive(Debug, Parser)]
 #[command(name = "rustunifimcp", version)]
@@ -24,7 +35,7 @@ pub struct UnifiCli {
     pub common: mecmcp_runtime::cli::Cli,
 
     /// Controller inventory. Must be mode 0600 and owned by the service user.
-    #[arg(long, default_value = "/etc/unifimcp/controllers.json")]
+    #[arg(long, default_value_os_t = default_controllers_file())]
     pub controllers_file: PathBuf,
 
     /// Run without two-person control for destructive operations.
@@ -487,5 +498,25 @@ mod tests {
         ])
         .expect("parses");
         assert!(cli.enable_metrics);
+    }
+
+    /// The shipped inventory path comes from the shared layout, and the
+    /// token store stays under `/var/lib`. This server never had an `/etc`
+    /// token path.
+    #[test]
+    fn controllers_default_follows_the_unifi_layout() {
+        use mecmcp_secret::naming::{ServerNaming, known};
+
+        let naming = ServerNaming::derive(known::UNIFI);
+        let controllers = naming.config_dir.join("controllers.json");
+        let tokens = naming.state_dir.join("tokens.json");
+
+        assert_eq!(default_controllers_file(), controllers);
+        assert_eq!(controllers, PathBuf::from("/etc/unifimcp/controllers.json"));
+        assert_eq!(tokens, PathBuf::from("/var/lib/unifimcp/tokens.json"));
+        assert_ne!(tokens, naming.config_dir.join("tokens.json"));
+
+        let cli = UnifiCli::try_parse_from(["rustunifimcp"]).expect("parses");
+        assert_eq!(cli.controllers_file, controllers);
     }
 }

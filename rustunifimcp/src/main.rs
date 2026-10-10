@@ -5,12 +5,14 @@ use clap::Parser;
 use mecmcp_audit::AuditFileSink;
 use mecmcp_auth::ScopeSet;
 use mecmcp_runtime::cli::{Command, TokenAction};
+use mecmcp_secret::validate::{CredentialFileRole, CredentialFileSpec, validate_credential_files};
 use mecmcp_transport::serve_router;
 use rmcp::ServiceExt;
 use rustunifimcp::cli::{TokenCli, TokenCommand, UnifiCli};
 use rustunifimcp::grant::UnifiGrant;
 use rustunifimcp::http_transport::build_http_router;
 use rustunifimcp::server::UnifiServer;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
@@ -357,6 +359,166 @@ fn load_approval_digest_key(
     .transpose()
 }
 
+/// Token store the HTTP listener will load.
+///
+/// Stdio does not consult `--tokens-file`. The container entrypoint bakes
+/// that flag in, and a stdio start must not fail because the bearer store
+/// is absent.
+fn listener_tokens(cli: &UnifiCli) -> Option<&Path> {
+    match cli.common.transport {
+        mecmcp_runtime::cli::Transport::Stdio => None,
+        mecmcp_runtime::cli::Transport::StreamableHttp => cli.common.tokens_file.as_deref(),
+    }
+}
+
+/// Files whose mode is checked together, before any of them is loaded.
+///
+/// A startup that checks one file and exits reports the next bad mode only
+/// on the next restart. [`validate_startup_credentials`] asks `mecmcp-secret`
+/// to report every offender in this list at once.
+struct StartupCredentialFiles<'a> {
+    /// Controller inventory. Required. Checked as owner-only, the same
+    /// ceiling the inventory loader enforces.
+    controllers: &'a Path,
+    /// Bearer-token store this process will load. Required when set. Never
+    /// resolved through an `/etc` fallback: this server shipped the
+    /// `/var/lib` path only.
+    tokens: Option<&'a Path>,
+    /// Audit HMAC key. Required when set; the caller creates a missing key first.
+    audit_hmac_key: Option<&'a Path>,
+    /// Approval digest key from `--approval-digest-key-file`. Required when set.
+    approval_digest_key: Option<&'a Path>,
+}
+
+/// Check every credential-adjacent file in one pass.
+///
+/// On-disk paths are unchanged. The inventory path is whatever
+/// `--controllers-file` names, each API key path is the one that inventory
+/// names, and the token path is `--tokens-file` exactly, with no second
+/// location.
+///
+/// # Errors
+/// Returns an error naming every file whose mode, owner, or presence failed
+/// its role. A missing API key file is not an error.
+fn validate_startup_credentials(files: &StartupCredentialFiles<'_>) -> Result<()> {
+    let inspected = inspect_controllers(files.controllers);
+    let mut specs = Vec::with_capacity(4 + inspected.api_key_files.len());
+    specs.push(CredentialFileSpec {
+        path: files.controllers,
+        role: CredentialFileRole::Secret,
+        description: "controller inventory",
+        required: true,
+    });
+    for path in &inspected.api_key_files {
+        specs.push(CredentialFileSpec {
+            path,
+            role: CredentialFileRole::Secret,
+            description: "UniFi API key",
+            required: false,
+        });
+    }
+    if let Some(path) = files.tokens {
+        specs.push(CredentialFileSpec {
+            path,
+            role: CredentialFileRole::Secret,
+            description: "bearer token store",
+            required: true,
+        });
+    }
+    if let Some(path) = files.audit_hmac_key {
+        specs.push(CredentialFileSpec {
+            path,
+            role: CredentialFileRole::Secret,
+            description: "audit HMAC key",
+            required: true,
+        });
+    }
+    if let Some(path) = files.approval_digest_key {
+        specs.push(CredentialFileSpec {
+            path,
+            role: CredentialFileRole::Secret,
+            description: "approval digest key",
+            required: true,
+        });
+    }
+
+    validate_credential_files(&specs)?;
+    Ok(())
+}
+
+/// API-key paths read from one inventory file.
+struct InspectedControllers {
+    api_key_files: Vec<PathBuf>,
+}
+
+/// Collect the API key paths `controllers.json` names.
+///
+/// A missing, unreadable, oversized, or unparseable file yields no paths.
+/// The inventory itself is still checked as owner-only by the caller.
+fn inspect_controllers(path: &Path) -> InspectedControllers {
+    let limit = mecmcp_secret::FileLimits::default().max_bytes;
+    let bytes = match std::fs::metadata(path) {
+        Ok(metadata) if metadata.len() > u64::try_from(limit).unwrap_or(u64::MAX) => {
+            return InspectedControllers {
+                api_key_files: Vec::new(),
+            };
+        }
+        Ok(_) => match std::fs::read(path) {
+            Ok(bytes) if bytes.len() <= limit => bytes,
+            _ => {
+                return InspectedControllers {
+                    api_key_files: Vec::new(),
+                };
+            }
+        },
+        Err(_) => {
+            return InspectedControllers {
+                api_key_files: Vec::new(),
+            };
+        }
+    };
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+        return InspectedControllers {
+            api_key_files: Vec::new(),
+        };
+    };
+    let mut api_key_files = Vec::new();
+    collect_api_key_files(&value, &mut api_key_files);
+    InspectedControllers { api_key_files }
+}
+
+fn collect_api_key_files(value: &serde_json::Value, found: &mut Vec<PathBuf>) {
+    match value {
+        serde_json::Value::Object(map) => {
+            for (key, child) in map {
+                if key.eq_ignore_ascii_case("api_key_file") {
+                    push_unique_path(found, child);
+                }
+                collect_api_key_files(child, found);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for child in items {
+                collect_api_key_files(child, found);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn push_unique_path(found: &mut Vec<PathBuf>, value: &serde_json::Value) {
+    let Some(path) = value.as_str() else {
+        return;
+    };
+    if path.is_empty() {
+        return;
+    }
+    let path = PathBuf::from(path);
+    if !found.iter().any(|existing| existing == &path) {
+        found.push(path);
+    }
+}
+
 /// A token-mutation audit record, built before the mutation and emitted after.
 ///
 /// The scope has to be captured up front because [`TokenAction`] is consumed by
@@ -668,6 +830,20 @@ async fn run_inner() -> Result<()> {
              Pass --state-file to persist change-set state across restarts."
         );
     }
+
+    // One pass over every credential-adjacent file. `init_audit` has already
+    // created a missing HMAC key, so this sees the file the process will use.
+    // Stdio does not consult `--tokens-file`: the image entrypoint always
+    // passes it, and a stdio start must still succeed when that path is
+    // absent. Tokens stay at the shipped `/var/lib/unifimcp/tokens.json`
+    // path; this server has no `/etc` token store.
+    validate_startup_credentials(&StartupCredentialFiles {
+        controllers: &cli.controllers_file,
+        tokens: listener_tokens(&cli),
+        audit_hmac_key: cli.common.audit_hmac_key_file.as_deref(),
+        approval_digest_key: cli.common.approval_digest_key_file.as_deref(),
+    })
+    .context("credential file validation")?;
 
     // Load registry.
     let registry = Arc::new(rustunifimcp_core::inventory::ControllerRegistry::load(
@@ -1852,6 +2028,206 @@ mod audit_tests {
             })
             .is_none(),
             "a read-only list must not write a mutation record"
+        );
+    }
+}
+
+#[cfg(all(test, unix))]
+#[allow(clippy::unwrap_used)]
+mod startup_credential_tests {
+    use super::{StartupCredentialFiles, listener_tokens, validate_startup_credentials};
+    use clap::Parser;
+    use rustunifimcp::cli::UnifiCli;
+    use std::io::Write;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn write_file(dir: &std::path::Path, name: &str, body: &[u8], mode: u32) -> std::path::PathBuf {
+        let path = dir.join(name);
+        let mut file = std::fs::File::create(&path).unwrap();
+        file.write_all(body).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
+        path
+    }
+
+    fn no_secret_inventory(api_key_file: &std::path::Path) -> String {
+        format!(
+            r#"{{"version":1,"devices":{{"home":{{"endpoint":"https://unifi.example.org","site":"default","api_key_file":"{}"}}}}}}"#,
+            api_key_file.display()
+        )
+    }
+
+    /// Two loose modes must come back together. The failure this guards is a
+    /// startup that names the first file, exits, and only names the second
+    /// after that restart.
+    #[test]
+    fn one_pass_reports_every_bad_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        let controllers = write_file(dir.path(), "controllers.json", b"{}\n", 0o644);
+        let tokens = write_file(dir.path(), "tokens.json", b"{}\n", 0o640);
+
+        let error = validate_startup_credentials(&StartupCredentialFiles {
+            controllers: &controllers,
+            tokens: Some(&tokens),
+            audit_hmac_key: None,
+            approval_digest_key: None,
+        })
+        .expect_err("both files are looser than their role allows");
+
+        let message = error.to_string();
+        assert!(
+            message.contains("2 credential file"),
+            "expected both failures in one error, got {message}"
+        );
+        assert!(message.contains("controllers.json"), "{message}");
+        assert!(message.contains("tokens.json"), "{message}");
+        assert!(message.contains("0644"), "{message}");
+        assert!(message.contains("0640"), "{message}");
+    }
+
+    /// An owner-only inventory, an owner-only token store, and an owner-only
+    /// API key file must pass together.
+    #[test]
+    fn acceptable_modes_pass_in_one_pass() {
+        let dir = tempfile::tempdir().unwrap();
+        let api_key = write_file(dir.path(), "api.key", b"key\n", 0o600);
+        let inventory = no_secret_inventory(&api_key);
+        let controllers = write_file(dir.path(), "controllers.json", inventory.as_bytes(), 0o600);
+        let tokens = write_file(dir.path(), "tokens.json", b"{}\n", 0o600);
+
+        validate_startup_credentials(&StartupCredentialFiles {
+            controllers: &controllers,
+            tokens: Some(&tokens),
+            audit_hmac_key: None,
+            approval_digest_key: None,
+        })
+        .expect("0600 inventory, api key, and tokens are acceptable modes");
+    }
+
+    /// A group-readable inventory is the same failure as a group-readable
+    /// token store. Both must be named in one error.
+    #[test]
+    fn group_readable_inventory_and_tokens_fail_together() {
+        let dir = tempfile::tempdir().unwrap();
+        let api_key = write_file(dir.path(), "api.key", b"key\n", 0o600);
+        let inventory = no_secret_inventory(&api_key);
+        let controllers = write_file(dir.path(), "controllers.json", inventory.as_bytes(), 0o640);
+        let tokens = write_file(dir.path(), "tokens.json", b"{}\n", 0o640);
+
+        let error = validate_startup_credentials(&StartupCredentialFiles {
+            controllers: &controllers,
+            tokens: Some(&tokens),
+            audit_hmac_key: None,
+            approval_digest_key: None,
+        })
+        .expect_err("0640 is too loose for the inventory and the token store");
+
+        let message = error.to_string();
+        assert!(
+            message.contains("2 credential file"),
+            "expected both failures in one error, got {message}"
+        );
+        assert!(message.contains("controllers.json"), "{message}");
+        assert!(message.contains("tokens.json"), "{message}");
+        assert!(message.contains("0640"), "{message}");
+        assert!(
+            !message.contains("api.key"),
+            "an owner-only API key must not be named, got {message}"
+        );
+    }
+
+    /// An owner-only inventory passes. A missing optional API key file is
+    /// not a failure.
+    #[test]
+    fn owner_only_inventory_and_missing_optional_file_pass() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("api.key");
+        let inventory = no_secret_inventory(&missing);
+        let controllers = write_file(dir.path(), "controllers.json", inventory.as_bytes(), 0o600);
+
+        validate_startup_credentials(&StartupCredentialFiles {
+            controllers: &controllers,
+            tokens: None,
+            audit_hmac_key: None,
+            approval_digest_key: None,
+        })
+        .expect("0600 inventory and an absent optional API key file must pass");
+    }
+
+    /// The API key file holds the credential, so group-read is a failure
+    /// even when the inventory next to it is owner-only.
+    #[test]
+    fn loose_api_key_is_a_secret() {
+        let dir = tempfile::tempdir().unwrap();
+        let api_key = write_file(dir.path(), "api.key", b"key\n", 0o640);
+        let inventory = no_secret_inventory(&api_key);
+        let controllers = write_file(dir.path(), "controllers.json", inventory.as_bytes(), 0o600);
+
+        let error = validate_startup_credentials(&StartupCredentialFiles {
+            controllers: &controllers,
+            tokens: None,
+            audit_hmac_key: None,
+            approval_digest_key: None,
+        })
+        .expect_err("0640 is too loose for the API key");
+
+        let message = error.to_string();
+        assert!(message.contains("api.key"), "{message}");
+        assert!(message.contains("0600"), "{message}");
+        assert!(
+            !message.contains("controllers.json"),
+            "an owner-only inventory must not be named, got {message}"
+        );
+    }
+
+    /// A required token path that is missing is named. No second path is tried.
+    #[test]
+    fn missing_required_tokens_file_is_named() {
+        let dir = tempfile::tempdir().unwrap();
+        let controllers = write_file(dir.path(), "controllers.json", b"{}\n", 0o600);
+        let tokens = dir.path().join("tokens.json");
+
+        let error = validate_startup_credentials(&StartupCredentialFiles {
+            controllers: &controllers,
+            tokens: Some(&tokens),
+            audit_hmac_key: None,
+            approval_digest_key: None,
+        })
+        .expect_err("a missing required token store must fail");
+
+        let message = error.to_string();
+        assert!(message.contains("tokens.json"), "{message}");
+        assert!(
+            !message.contains("/etc/unifimcp/tokens.json"),
+            "this server has no /etc token store, got {message}"
+        );
+    }
+
+    #[test]
+    fn stdio_does_not_require_the_token_store() {
+        let cli = UnifiCli::try_parse_from([
+            "rustunifimcp",
+            "--transport",
+            "stdio",
+            "--tokens-file",
+            "/var/lib/unifimcp/tokens.json",
+        ])
+        .unwrap();
+        assert!(listener_tokens(&cli).is_none());
+    }
+
+    #[test]
+    fn http_checks_the_configured_token_path() {
+        let cli = UnifiCli::try_parse_from([
+            "rustunifimcp",
+            "--transport",
+            "streamable-http",
+            "--tokens-file",
+            "/var/lib/unifimcp/tokens.json",
+        ])
+        .unwrap();
+        assert_eq!(
+            listener_tokens(&cli).map(std::path::Path::to_path_buf),
+            Some(std::path::PathBuf::from("/var/lib/unifimcp/tokens.json"))
         );
     }
 }
