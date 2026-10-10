@@ -3,8 +3,9 @@ name: Sign release tarball
 # Wires scripts/package-lxc.sh's LXC/systemd tarball into the signed
 # release pipeline. Before this workflow, GitHub releases shipped no
 # tarball at all -- the image was the only published artifact, but
-# packaging/lxc/install.sh requires an extracted tarball with
-# bin/rustunifimcp, so systemd/LXC installs had nothing to install from.
+# packaging/lxc/install.sh requires an extracted tarball with the
+# rustunifimcp binary at its root, so systemd/LXC installs had nothing
+# to install from.
 # Mirrors rustpanosmcp's release-sign-tarball.yml, itself extracted from
 # rustjunosmcp's -- see mecmcp's docs/RELEASE-WORKFLOWS.md.
 #
@@ -113,9 +114,6 @@ jobs:
         uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master
         with:
           toolchain: 1.98.0
-
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
 
       - name: Build release archive
         run: ./scripts/package-lxc.sh
