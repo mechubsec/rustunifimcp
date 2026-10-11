@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-10-11
+
+### Added
+
+- GitHub releases now carry a cosign-signed LXC/systemd tarball (plus a
+  checksum), built from a clean cache after the release is published.
+  Previously a release shipped no installable artifact for non-container
+  deployments.
+
 ### Changed
 
 - Startup checks credential-file modes in one pass, using the shared layout
