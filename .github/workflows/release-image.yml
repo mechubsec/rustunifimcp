@@ -45,6 +45,8 @@ jobs:
   build-and-push:
     needs: sbom
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     permissions:
       contents: read
       packages: write
@@ -243,3 +245,14 @@ jobs:
           subject-digest: ${{ steps.build.outputs.digest }}
           sbom-path: rustunifimcp/rustunifimcp.cdx.json
           push-to-registry: true
+
+  registry-publish:
+    name: Publish to MCP Registry
+    needs: build-and-push
+    permissions:
+      contents: read
+      id-token: write
+    uses: mechubsec/mecmcp/.github/workflows/reusable-registry-publish.yml@19401120439cd1420701bb59b6495bfdd3718b93 # v0.27.0
+    with:
+      version: ${{ needs.build-and-push.outputs.version }}
+      oci-image: ghcr.io/${{ github.repository }}:${{ needs.build-and-push.outputs.version }}
