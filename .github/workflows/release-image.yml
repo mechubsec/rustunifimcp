@@ -30,6 +30,7 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: read
+      id-token: write   # keyless cosign signing of the Docker Hub ref
     steps:
       - name: Validate tag format
         env:
@@ -66,9 +67,9 @@ jobs:
           TAG: ${{ github.event.inputs.backfill-tag }}
         run: |
           set -euo pipefail
-          DIGEST=$(docker buildx imagetools inspect "ghcr.io/${GITHUB_REPOSITORY}:${TAG}" --format '{{json .Manifest}}' | jq -r '.digest')
+          DIGEST=$(docker buildx imagetools inspect "ghcr.io/${GITHUB_REPOSITORY}:${TAG#v}" --format '{{json .Manifest}}' | jq -r '.digest')
           if [[ -z "$DIGEST" || "$DIGEST" == "null" ]]; then
-            echo "::error::could not resolve a digest for ghcr.io/${GITHUB_REPOSITORY}:${TAG}"
+            echo "::error::could not resolve a digest for ghcr.io/${GITHUB_REPOSITORY}:${TAG#v}"
             exit 1
           fi
           echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
@@ -83,10 +84,21 @@ jobs:
             --certificate-oidc-issuer https://token.actions.githubusercontent.com \
             "ghcr.io/${GITHUB_REPOSITORY}@${DIGEST}"
 
-      - name: Copy signature to Docker Hub
+      - name: Sign the Docker Hub image (keyless)
         env:
           DIGEST: ${{ steps.digest.outputs.digest }}
-        run: cosign copy -f --only=sig "ghcr.io/${GITHUB_REPOSITORY}@${DIGEST}" "docker.io/mechub/rustunifimcp@${DIGEST}"
+        shell: bash
+        run: |
+          set -uo pipefail
+          out="$(cosign sign --yes "docker.io/mechub/rustunifimcp@${DIGEST}" 2>&1)" && rc=0 || rc=$?
+          echo "$out"
+          if [ "$rc" -ne 0 ]; then
+            if echo "$out" | grep -Eqi '409|already exists'; then
+              echo "::notice::Rekor entry already exists for this digest; relying on the verify gate."
+            else
+              exit "$rc"
+            fi
+          fi
 
       - name: Verify the Docker Hub image is now signed
         env:
@@ -280,17 +292,37 @@ jobs:
           REPO: ${{ github.repository }}
           DIGEST: ${{ steps.build.outputs.digest }}
 
-      - name: Copy signature to Docker Hub
-        # GHCR and Docker Hub hold the same bytes at the same digest, so a
-        # second `cosign sign` of that digest produces the same Rekor entry
-        # (same signed subject, same signing identity) and gets rejected
-        # with a 409 "equivalent entry already exists" -- Rekor is correctly
-        # refusing to double-log an identical statement, not reporting a
-        # problem. `cosign copy` attaches the signature already proven for
-        # GHCR onto the Docker Hub ref directly, with no second signing
-        # round and so no duplicate-entry conflict. `-f` makes a re-run of
-        # this job idempotent.
-        run: cosign copy -f --only=sig "ghcr.io/${REPO}@${DIGEST}" "docker.io/mechub/rustunifimcp@${DIGEST}"
+      - name: Sign image (keyless) -- Docker Hub
+        # `cosign copy --only=sig` copies nothing for cosign v3 OCI-referrer
+        # signatures yet exits 0, so it would leave Docker Hub unsigned under
+        # a green run. Sign the Docker Hub ref directly. A repeat sign of the
+        # same digest can get a Rekor 409 "already exists"; that is the only
+        # failure tolerated, and the verify gate below is the hard check.
+        shell: bash
+        run: |
+          set -uo pipefail
+          out="$(cosign sign --yes "docker.io/mechub/rustunifimcp@${DIGEST}" 2>&1)" && rc=0 || rc=$?
+          echo "$out"
+          if [ "$rc" -ne 0 ]; then
+            if echo "$out" | grep -Eqi '409|already exists'; then
+              echo "::notice::Rekor entry already exists for this digest; relying on the verify gate."
+            else
+              exit "$rc"
+            fi
+          fi
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+
+      - name: Verify signatures (hard gate) -- GHCR and Docker Hub
+        run: |
+          set -euo pipefail
+          for ref in "ghcr.io/${REPO}@${DIGEST}" "docker.io/mechub/rustunifimcp@${DIGEST}"; do
+            echo "Verifying ${ref}"
+            cosign verify \
+              --certificate-identity-regexp "^https://github\.com/${REPO}/" \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+              "${ref}" > /dev/null
+          done
         env:
           REPO: ${{ github.repository }}
           DIGEST: ${{ steps.build.outputs.digest }}
