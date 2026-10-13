@@ -788,8 +788,7 @@ async fn run_inner() -> Result<()> {
     // file were both parsed first, so a wrong file mode or a malformed token
     // store masked the CLI error entirely -- the opposite order from the rest
     // of the family. See mecmcp#358.
-    mecmcp_runtime::cli_validate::validate(&cli.common)
-        .map_err(|refusal| anyhow::anyhow!("{refusal}"))?;
+    mecmcp_runtime::cli_validate::validate_or_exit(&cli.common);
 
     // The systemd unit passes --audit-format/--audit-log-file/--audit-journald
     // unconditionally, and until now nothing here consumed them: the server
