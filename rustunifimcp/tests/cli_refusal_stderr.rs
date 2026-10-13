@@ -280,3 +280,21 @@ fn token_add_with_both_scopes_and_allow_self_approval_is_accepted() {
         "token must be stored: {stored}"
     );
 }
+
+/// Every shared refusal fixture must reach stderr exactly as the shared
+/// validator words it, so this server cannot drift from the rest of the
+/// family again. See mecmcp#358.
+#[test]
+fn shared_refusal_fixtures_match_expected_stderr() {
+    use mecmcp_runtime::cli_validate::testing::{expected_stderr, refusal_fixtures};
+
+    for (args, refusal) in refusal_fixtures() {
+        let output = run(&args);
+        assert_eq!(output.status.code(), Some(1), "args: {args:?}");
+        assert_eq!(
+            stderr_of(&output).trim_end(),
+            expected_stderr(&refusal),
+            "args: {args:?}"
+        );
+    }
+}

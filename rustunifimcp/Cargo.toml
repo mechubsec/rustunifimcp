@@ -41,6 +41,8 @@ tempfile = "3"
 # moved that behind this feature and dropped its `ureq` dependency from the
 # normal (non-test-util) dependency graph.
 mecmcp-transport = { workspace = true, features = ["test-util"] }
+# Test-only: the shared CLI refusal fixtures live behind `test-util`.
+mecmcp-runtime = { workspace = true, features = ["test-util"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 # Test-only: the redaction sweep (tests/redaction_sweep.rs) stands up a mock
 # UniFi controller over a real TLS listener rather than asserting on
