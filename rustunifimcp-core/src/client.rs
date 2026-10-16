@@ -572,12 +572,24 @@ impl crate::changeset::apply::ControllerOps for UnifiClient {
                         UnifiError::Malformed(format!("unknown resource kind '{kind}': {e}"))
                     })?;
 
+                // For dhcp_reservation, ensure use_fixedip is set when fixed_ip is present.
+                // Without this, the UniFi API creates a named client but not a DHCP reservation.
+                let mut body = body.clone();
+                if kind == "dhcp_reservation"
+                    && let Some(fixed_ip) = body.get("fixed_ip")
+                    && *fixed_ip != serde_json::Value::Null
+                {
+                    body.as_object_mut()
+                        .expect("body is an object")
+                        .insert("use_fixedip".to_string(), serde_json::Value::Bool(true));
+                }
+
                 let surface = resource_kind.surface();
                 let site = self.default_site_for(surface).await?;
                 let template = resource_kind.path_template();
 
                 let response = self
-                    .post(surface, template, &[("site", &site)], &[], body)
+                    .post(surface, template, &[("site", &site)], &[], &body)
                     .await?;
 
                 // Extract the created resource ID from the response
