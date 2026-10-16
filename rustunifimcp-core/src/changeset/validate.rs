@@ -152,6 +152,36 @@ pub fn check_writable_fields(mutations: &[StagedMutation]) -> Result<(), UnifiEr
                 )));
             }
         }
+
+        check_dhcp_reservation_fixedip(mutation, resource_kind, object)?;
+    }
+    Ok(())
+}
+
+/// A DHCP reservation only exists on the controller when `use_fixedip` is
+/// true; a body that names a `fixed_ip` without it creates a plain named
+/// client. The body is never rewritten at apply time, so the approved plan is
+/// exactly what is sent: a create with a non-null `fixed_ip` must say
+/// `use_fixedip: true`, and an update may not say `false` alongside one.
+fn check_dhcp_reservation_fixedip(
+    mutation: &StagedMutation,
+    kind: ResourceKind,
+    object: &serde_json::Map<String, Value>,
+) -> Result<(), UnifiError> {
+    if kind != ResourceKind::DhcpReservation || object.get("fixed_ip").is_none_or(Value::is_null) {
+        return Ok(());
+    }
+    let use_fixedip = object.get("use_fixedip");
+    let refused = match mutation {
+        StagedMutation::Create { .. } => use_fixedip != Some(&Value::Bool(true)),
+        _ => use_fixedip == Some(&Value::Bool(false)),
+    };
+    if refused {
+        return Err(UnifiError::WriteRefused(format!(
+            "staged {} sets 'fixed_ip' without 'use_fixedip: true', which would not create a \
+             DHCP reservation; stage 'use_fixedip': true explicitly",
+            mutation.preview()
+        )));
     }
     Ok(())
 }
@@ -925,6 +955,31 @@ mod writable_fields_tests {
             "{rendered}"
         );
         assert!(rendered.contains("network"), "{rendered}");
+    }
+
+    /// A reservation create naming a fixed IP must stage `use_fixedip: true`
+    /// itself, and an explicit `false` is refused, so what is approved is what
+    /// the controller receives.
+    #[test]
+    fn dhcp_reservation_fixed_ip_requires_use_fixedip() {
+        let mac = "aa:bb:cc:dd:ee:ff";
+        let missing = StagedMutation::create(
+            "dhcp_reservation",
+            json!({ "mac": mac, "fixed_ip": "10.0.0.5" }),
+        );
+        assert!(check_writable_fields(&[missing]).is_err());
+        let contradictory = StagedMutation::create(
+            "dhcp_reservation",
+            json!({ "mac": mac, "fixed_ip": "10.0.0.5", "use_fixedip": false }),
+        );
+        assert!(check_writable_fields(&[contradictory]).is_err());
+        let ok = StagedMutation::create(
+            "dhcp_reservation",
+            json!({ "mac": mac, "fixed_ip": "10.0.0.5", "use_fixedip": true }),
+        );
+        assert!(check_writable_fields(&[ok]).is_ok());
+        let no_ip = StagedMutation::create("dhcp_reservation", json!({ "mac": mac }));
+        assert!(check_writable_fields(&[no_ip]).is_ok());
     }
 
     /// A body naming only allowed fields must pass.
