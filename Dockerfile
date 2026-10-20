@@ -12,7 +12,7 @@
 # Pinned to the multi-arch image index digest resolved on 2026-09-29 (covers
 # both linux/amd64 and linux/arm64; buildx picks the matching manifest for
 # whichever platform it is building under --platform).
-FROM rust:1.99-slim-trixie@sha256:2752b332db73fdbb7dc576f06c82ed1f312005784ef913d7e04a28f5f55dc581 AS builder
+FROM rust:1.99-slim-trixie@sha256:4df2ae8cfdfebdfc13a65da7f253b73d68983dc0339f2719bc17a279c913b13d AS builder
 
 WORKDIR /build
 
