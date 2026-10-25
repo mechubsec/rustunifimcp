@@ -9,7 +9,17 @@
       "name": "Test AP",
       "type": "uap",
       "model": "U6-Pro",
-      "ip": "192.0.2.10"
+      "ip": "192.0.2.10",
+      "x_authkey": "EXAMPLE-device-authkey-fake1",
+      "x_inform_authkey": "EXAMPLE-inform-authkey-fake1",
+      "syslog_key": "EXAMPLE-syslog-key-fake1",
+      "guest_token": "EXAMPLE-guest-token-fake1",
+      "x_ssh_hostkey_fingerprint": "EXAMPLE-ssh-hostkey-fake1",
+      "ssh_session_table": [
+        {
+          "user": "EXAMPLE-ssh-session-fake1"
+        }
+      ]
     }
   ]
 }

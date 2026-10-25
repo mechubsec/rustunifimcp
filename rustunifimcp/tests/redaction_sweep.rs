@@ -58,6 +58,13 @@ const FIXTURE_SECRETS: &[&str] = &[
     "EXAMPLE-policy-shared-secret-fake1",
     "EXAMPLE-802-1x-password-fake1",
     "EXAMPLE-event-secret-fake1-AQ==",
+    // GHSA-7fmh-fgch-xwqf: `stat/device` keys joined into the health report.
+    "EXAMPLE-device-authkey-fake1",
+    "EXAMPLE-inform-authkey-fake1",
+    "EXAMPLE-syslog-key-fake1",
+    "EXAMPLE-guest-token-fake1",
+    "EXAMPLE-ssh-hostkey-fake1",
+    "EXAMPLE-ssh-session-fake1",
 ];
 
 fn secure(path: &std::path::Path) {

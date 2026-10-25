@@ -71,6 +71,53 @@ const DEVICE_FIELDS: FieldAllowlist = FieldAllowlist::new(&[
     "interfaces",
 ]);
 
+/// Fields the model may see in a device's private `stat/device` record, which
+/// `unifi_site_health_report` joins onto each device as `stats`.
+///
+/// That record is the controller's whole device document: it carries the
+/// inform/auth keys (`x_authkey`, `x_inform_authkey`), `syslog_key`,
+/// `guest_token`, SSH host-key material and `ssh_session_table`, which the
+/// denylist-and-shape scan does not catch by name (GHSA-7fmh-fgch-xwqf). The
+/// WAN fields are kept for dual-WAN monitoring; `wan1`/`wan2` are narrowed
+/// further by [`WAN_PORT_FIELDS`].
+const DEVICE_STATS_FIELDS: FieldAllowlist = FieldAllowlist::new(&[
+    "mac",
+    "name",
+    "model",
+    "type",
+    "state",
+    "version",
+    "uptime",
+    "upgradable",
+    "overheating",
+    "num_sta",
+    "satisfaction",
+    "system-stats",
+    "uplink",
+    "last_wan_interfaces",
+    "last_wan_status",
+    "wan1",
+    "wan2",
+]);
+
+/// Fields kept inside a gateway's `wan1`/`wan2` port record; its neighbour
+/// `mac_table` and counters are dropped.
+const WAN_PORT_FIELDS: FieldAllowlist = FieldAllowlist::new(&["ip", "up", "status"]);
+
+/// Project a private `stat/device` record down to [`DEVICE_STATS_FIELDS`].
+#[must_use]
+pub fn project_device_stats(value: &Value) -> Value {
+    let mut projected = DEVICE_STATS_FIELDS.project(value);
+    if let Some(obj) = projected.as_object_mut() {
+        for wan in ["wan1", "wan2"] {
+            if let Some(port) = obj.get_mut(wan) {
+                *port = WAN_PORT_FIELDS.project(port);
+            }
+        }
+    }
+    projected
+}
+
 /// Fields the model may see for a [`ResourceKind::Network`].
 ///
 /// Deliberately excludes every WAN credential a network can carry --
