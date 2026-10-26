@@ -38,7 +38,8 @@ configuration and nothing else, which makes it the real test of whether
 **In daily use on the maintainer's infrastructure (alpha). The dependency on the legacy server is retired.**
 
 `rustunifimcp` v0.6.3 serves the full surface — reads, workflows, operational
-actions, and change control — from LXC 981 over TLS, under two-person control.
+actions, and change control — over TLS from two production guests: LXC 981 in lab
+mode and LXC 982 under two-person control.
 The `unifi-mcp-legacy` registration is gone; nothing routes to the Python
 server any more.
 
@@ -50,7 +51,8 @@ separate decision for its owner.
 
 | Guest | Role | Endpoint |
 |---|---|---|
-| 981 `prod-unifimcp` | daily-use lab guest, two-person, TLS | `https://prod-unifimcp.example.org:30033/mcp` |
+| 981 `prod-unifimcp` | daily-use lab guest, `--lab-mode`, TLS | `https://prod-unifimcp.example.org:30033/mcp` |
+| 982 `prod-unifi2mcp` | daily-use lab guest, two-person, TLS | `https://prod-unifi2mcp.example.org:30033/mcp` |
 | 622 `test-twoperson-unifi` | rig, two-person | `http://test-twoperson-unifi.example.org:30033/mcp` |
 | 623 `test-labmode-unifi` | rig, `--lab-mode` | `http://test-labmode-unifi.example.org:30033/mcp` |
 

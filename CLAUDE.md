@@ -2,37 +2,56 @@
 
 Guidance for Claude Code working in this repository.
 
-## Deployment: `rustunifimcp`'s own production runs two-person control, not `--lab-mode`
+## Deployment: two production instances, one per mode
 
-This project's production instance (LXC 981 `prod-unifimcp`, see `README.md`) runs
-**without** `--lab-mode`, under two-person control: the token that stages a change
-set cannot also approve it, and approval requires a distinct `actor_type: human`
-token. `--lab-mode` **waives that second-principal requirement** — it is for
-single-operator rigs and test instances only (see `docs/HOW-TO-SETUP-LXC.md`, LXC
-623 `test-labmode-unifi`), never for a production deployment whose whole point is
-governed, audited change control.
+There are two production instances, both on pve2 and both tagged `protected`. Each
+runs a different approval mode on purpose. Work out which one you are on before
+reading `lab_mode` as a fault.
 
-**Do not add `--lab-mode` to a production instance.** Doing so silently waives the
-approval gate this server exists to enforce, and the symptom is easy to miss:
-`unifimcp_status` still reports `tool_count`/`write_tool_count` unchanged, and the
-only visible difference is `lab_mode: true` and self-approval succeeding where it
-should be refused.
+| Guest | MCP registration | Mode | `unifimcp_status.lab_mode` | Drop-in in `rustunifimcp.service.d/` |
+|---|---|---|---|---|
+| LXC 981 `prod-unifimcp` | `prod-labmode-unifi` | lab mode | `true` | `labmode.conf` |
+| LXC 982 `prod-unifi2mcp` | `prod-unifi2mcp` | two-person control | `false` | `twoperson.conf` |
+| LXC 622 `test-twoperson-unifi` | none | two-person, test rig | `false` | `override.conf` |
+| LXC 623 `test-labmode-unifi` | none | lab mode, test rig | `true` | `override.conf` |
 
-If you are instead standing up a **single-operator lab rig** that intentionally
-wants `--lab-mode`, the flag should live in a **dedicated drop-in** so an
-`install.sh` unit rewrite cannot silently drop it:
+The trap: 981's guest name says `unifimcp`, but its MCP registration says `labmode`.
+The test rigs are tagged `disposable`, are normally stopped, and serve plain HTTP, not
+TLS.
 
-```
-/etc/systemd/system/rustunifimcp.service.d/labmode.conf
-```
+- **Two-person control (982):** the token that stages a change set cannot approve
+  it. Approval needs a second, distinct `actor_type: human` token.
+- **Lab mode (981):** `--lab-mode` waives the second principal for a single
+  operator. Each approval it records has `approver: null` and
+  `approval_waiver: "lab-mode"`, so a waived approval can still be told apart from a
+  reviewed one.
 
-That drop-in re-declares the full `ExecStart` (blank line first to clear the shipped
-one) with `--lab-mode` appended, and sets `Environment=UNIFIMCP_LAB_MODE_MARKER=1` as
-a greppable marker.
+**Do not move either production instance to the other's mode.** Both values of
+`lab_mode` are correct where they are. A mismatch with the table is the fault:
 
-**After changing it, restart the service and confirm with the `unifimcp_status` tool
-that `lab_mode` matches what you intended.** Two things that will mislead you if you
-skip that:
+- 981 reporting `false` means `labmode.conf` was lost or overridden.
+- 982 reporting `true` means lab mode leaked into `twoperson.conf`. Its approval gate
+  is then silently waived, and `tool_count`/`write_tool_count` do not change to
+  show it.
+
+Both drop-ins live in `/etc/systemd/system/rustunifimcp.service.d/`. Each one starts
+with a blank `ExecStart=` to clear the shipped line, then re-declares the full
+`ExecStart`. Keeping the mode in a drop-in means an `install.sh` unit rewrite cannot
+drop it.
+
+- `labmode.conf` appends `--lab-mode` and sets `Environment=UNIFIMCP_LAB_MODE_MARKER=1`
+  as a greppable marker.
+- `twoperson.conf` is generated from 981's `labmode.conf`, with `--lab-mode` and the
+  marker removed. A change to the server's command line, such as a new flag, must be
+  made in both files.
+
+**Upgrades:** do the test rigs first, then 982, then 981. Snapshot each production
+guest first as `pre-X-Y-Z`. When `packaging/` is unchanged since the last release,
+swap only `/usr/local/bin/rustunifimcp`, which leaves the units alone.
+
+**After changing a drop-in, restart the service and confirm with the `unifimcp_status`
+tool that `lab_mode` matches the table above.** Two things that will mislead you if
+you skip that:
 
 - The shipped unit sets `ProtectSystem=strict`, so verify the service actually came
   back rather than assuming the drop-in parsed.
@@ -46,8 +65,8 @@ skip that:
 `unifimcp_status` returns `tool_count` and `write_tool_count` regardless of mode.
 `tool_count: 22, write_tool_count: 11, lab_mode: false` means the writes exist and are
 gated behind two-person approval, not missing — that distinction is the fastest way
-to tell a config problem from a capability gap. `lab_mode: true` on a production
-instance is itself the problem: see the section above.
+to tell a config problem from a capability gap. Whether `lab_mode` should be `true`
+depends on the instance: check the table above.
 
 ## Upgrading past the change-set store swap
 
