@@ -831,10 +831,10 @@ pub fn first_station_mac(stations: &serde_json::Value) -> Option<String> {
 /// Join devices with their statistics by MAC address.
 ///
 /// `devices` is projected through the [`ResourceKind::Device`] allowlist
-/// before the join, and the joined `stats` blob -- which has no allowlist of
-/// its own -- goes through the shared crate's denylist-and-shape scan, so
-/// neither side of the join can reintroduce a field the read path would have
-/// dropped.
+/// before the join, and the joined `stats` blob -- the raw `stat/device`
+/// record, inform/auth keys included -- through
+/// [`crate::redact::project_device_stats`], so neither side of the join can
+/// reintroduce a field the read path would have dropped.
 fn join_devices_with_stats(
     devices: &[serde_json::Value],
     stats: &[serde_json::Value],
@@ -849,7 +849,10 @@ fn join_devices_with_stats(
                     .find(|s| s.get("mac").and_then(|v| v.as_str()) == Some(mac))
                 && let Some(obj) = enriched.as_object_mut()
             {
-                obj.insert("stats".to_owned(), crate::redact::redact_owned(stat));
+                obj.insert(
+                    "stats".to_owned(),
+                    crate::redact::project_device_stats(stat),
+                );
             }
             enriched
         })
@@ -994,6 +997,66 @@ mod tests {
             report.devices.len(),
             device_count,
             "the join dropped devices"
+        );
+    }
+
+    /// GHSA-7fmh-fgch-xwqf: the joined `stats` is the controller's raw
+    /// `stat/device` record. No secret-named field may survive the join, and
+    /// the gateway WAN fields dual-WAN monitoring reads must.
+    #[test]
+    fn health_report_stats_drop_device_secrets_and_keep_wan_fields() {
+        let device = serde_json::json!({ "macAddress": "02:00:00:01:01:fe", "name": "Gateway" });
+        let stat = serde_json::json!({
+            "mac": "02:00:00:01:01:fe",
+            "x_authkey": "EXAMPLE",
+            "x_inform_authkey": "EXAMPLE",
+            "syslog_key": "EXAMPLE",
+            "guest_token": "EXAMPLE",
+            "x_ssh_hostkey_fingerprint": "EXAMPLE",
+            "x_aes_gcm": true,
+            "ssh_session_table": [{ "user": "EXAMPLE" }],
+            "last_wan_interfaces": { "WAN": { "alive": true, "ip": "192.0.2.8" } },
+            "last_wan_status": { "WAN": "online", "WAN2": "offline" },
+            "uplink": { "comment": "WAN", "ip": "192.0.2.8", "up": true },
+            "wan1": { "ip": "192.0.2.8", "up": true, "status": "online",
+                      "mac_table": [{ "mac": "02:00:00:00:01:01" }] },
+            "wan2": { "ip": "192.0.2.4", "up": false, "status": "offline" },
+        });
+
+        let joined = super::join_devices_with_stats(&[device], &[stat]);
+        let stats = &joined[0]["stats"];
+
+        fn walk(value: &serde_json::Value, path: &str) {
+            match value {
+                serde_json::Value::Object(map) => {
+                    for (key, child) in map {
+                        let lower = key.to_ascii_lowercase();
+                        assert!(
+                            !lower.starts_with("x_")
+                                && !lower.contains("key")
+                                && !lower.contains("token")
+                                && lower != "ssh_session_table",
+                            "secret-named field survived: {path}.{key}"
+                        );
+                        walk(child, &format!("{path}.{key}"));
+                    }
+                }
+                serde_json::Value::Array(items) => items.iter().for_each(|i| walk(i, path)),
+                _ => {}
+            }
+        }
+        walk(stats, "stats");
+
+        assert_eq!(stats["last_wan_interfaces"]["WAN"]["ip"], "192.0.2.8");
+        assert_eq!(stats["last_wan_status"]["WAN2"], "offline");
+        assert_eq!(stats["uplink"]["comment"], "WAN");
+        assert_eq!(
+            stats["wan1"],
+            serde_json::json!({ "ip": "192.0.2.8", "up": true, "status": "online" })
+        );
+        assert_eq!(
+            stats["wan2"],
+            serde_json::json!({ "ip": "192.0.2.4", "up": false, "status": "offline" })
         );
     }
 

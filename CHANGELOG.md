@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.3] - 2026-10-26
+
+### Security
+
+- `unifi_site_health_report` no longer returns the controller's raw device
+  record in `devices[].stats` (GHSA-7fmh-fgch-xwqf). That record carried the
+  device's inform/auth keys, syslog key, guest token, SSH host-key material
+  and SSH session table. `stats` now goes through an allowlist. It keeps the
+  gateway WAN fields (`uplink`, `last_wan_interfaces`, `last_wan_status`, and
+  `wan1`/`wan2` narrowed to `ip`/`up`/`status`) plus basic health counters.
+  If a report from an affected version reached untrusted clients or logs,
+  rotate the affected devices' inform/auth and syslog keys.
+- Bumped `tokio` to 1.54.1 (1.54.0 was yanked, RUSTSEC-2026-0384) and
+  `ctutils` to 0.4.6 (RUSTSEC-2026-0385).
+
+### Fixed
+
+- `dhcp_reservation` create sets `use_fixedip` when `fixed_ip` is present.
+
 ## [0.6.2] - 2026-10-11
 
 ### Added

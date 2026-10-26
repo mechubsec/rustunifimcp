@@ -1280,7 +1280,7 @@ impl UnifiServer {
 
     #[tool(
         name = "unifi_site_health_report",
-        description = "Generate a site health report joining devices, health metrics, and statistics. Output is redacted: device fields are narrowed to the device allowlist, health/stats pass through a best-effort secret scan."
+        description = "Generate a site health report joining devices, health metrics, and statistics. Output is redacted: device fields and their joined stats are narrowed to allowlists, health passes through a best-effort secret scan."
     )]
     async fn unifi_site_health_report(
         &self,
