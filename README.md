@@ -150,6 +150,10 @@ docker run --rm -i \
   --transport stdio
 ```
 
+The server is listed in the MCP registry as `io.github.mechubsec/rustunifimcp`, whose
+entry runs exactly this stdio command. The same image is on Docker Hub as
+`docker.io/mechub/rustunifimcp`.
+
 stdio carries no caller identity, so change-set approval and the direct-commit
 tools are refused; use the streamable-HTTP setup in
 [`docs/HOW-TO-SETUP-DOCKER.md`](docs/HOW-TO-SETUP-DOCKER.md) for two-person
