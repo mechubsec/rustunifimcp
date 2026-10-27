@@ -550,6 +550,48 @@ fn percent_encode(s: &str) -> String {
         .collect()
 }
 
+/// Extract the controller-assigned id from a create response.
+///
+/// Private v2 returns the created object or a bare array; v1 and the
+/// Integration API envelope it in `data`. The POST has already succeeded when
+/// this runs, so every error says the resource may exist untracked.
+fn created_id(
+    surface: ApiSurface,
+    kind: &str,
+    response: &serde_json::Value,
+) -> Result<String, UnifiError> {
+    let orphan = |detail: &str| {
+        UnifiError::Malformed(format!(
+            "create {kind}: the controller accepted the request but its response {detail}; \
+             the resource may exist on the controller without this change set tracking it"
+        ))
+    };
+    let items = match surface {
+        ApiSurface::Supported | ApiSurface::PrivateV1 => {
+            crate::model::unwrap_enveloped_data(response)
+                .map_err(|_| orphan("is not an enveloped `data` array"))?
+                .as_slice()
+        }
+        ApiSurface::PrivateV2 => match response.as_array() {
+            Some(array) => array.as_slice(),
+            None if response.is_object() => std::slice::from_ref(response),
+            None => return Err(orphan("is neither an object nor an array")),
+        },
+        ApiSurface::Cloud => {
+            return Err(UnifiError::Malformed(
+                "cloud surface not supported".to_owned(),
+            ));
+        }
+    };
+
+    items
+        .first()
+        .and_then(|item| item.get("_id"))
+        .and_then(|id| id.as_str())
+        .map(str::to_owned)
+        .ok_or_else(|| orphan("carries no `_id`"))
+}
+
 /// Implementation of `ControllerOps` for `UnifiClient`.
 ///
 /// This allows `UnifiClient` to be used with `apply_sequentially` and other
@@ -561,7 +603,7 @@ impl crate::changeset::apply::ControllerOps for UnifiClient {
         mutation: &crate::changeset::StagedMutation,
     ) -> Result<Option<String>, crate::error::UnifiError> {
         use crate::changeset::StagedMutation;
-        use crate::model::{ResourceKind, unwrap_enveloped_data};
+        use crate::model::ResourceKind;
         use crate::tools::read::single_resource_template;
 
         match mutation {
@@ -580,35 +622,7 @@ impl crate::changeset::apply::ControllerOps for UnifiClient {
                     .post(surface, template, &[("site", &site)], &[], body)
                     .await?;
 
-                // Extract the created resource ID from the response
-                let items = match surface {
-                    ApiSurface::Supported | ApiSurface::PrivateV1 => {
-                        unwrap_enveloped_data(&response)?
-                    }
-                    ApiSurface::PrivateV2 => response.as_array().ok_or_else(|| {
-                        UnifiError::Malformed("expected Private v2 bare array".to_owned())
-                    })?,
-                    ApiSurface::Cloud => {
-                        return Err(UnifiError::Malformed(
-                            "cloud surface not supported".to_owned(),
-                        ));
-                    }
-                };
-
-                if items.is_empty() {
-                    return Err(UnifiError::Malformed(format!(
-                        "create {kind}: response has no data"
-                    )));
-                }
-
-                let id = items[0]
-                    .get("_id")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| {
-                        UnifiError::Malformed(format!("create {kind}: response has no _id"))
-                    })?;
-
-                Ok(Some(id.to_owned()))
+                created_id(surface, kind, &response).map(Some)
             }
 
             StagedMutation::Update { kind, id, body } => {
@@ -1011,7 +1025,7 @@ impl crate::changeset::apply::ControllerOps for UnifiClient {
 
 #[cfg(test)]
 mod tests {
-    use super::UnifiClient;
+    use super::{UnifiClient, created_id};
     use crate::ApiSurface;
     use crate::inventory::Controller;
 
@@ -1132,5 +1146,39 @@ mod tests {
             .expect("default site has an id");
 
         assert!(!uuid.is_empty(), "site UUID is not empty");
+    }
+
+    /// A v2 single-resource POST returns the created object, not an array.
+    #[test]
+    fn created_id_accepts_a_v2_single_object_and_a_bare_array() {
+        let object = serde_json::json!({"_id": "abc"});
+        let array = serde_json::json!([{"_id": "abc"}]);
+        for response in [object, array] {
+            let id = created_id(ApiSurface::PrivateV2, "firewall_policy", &response);
+            assert_eq!(id.expect("id"), "abc");
+        }
+    }
+
+    #[test]
+    fn created_id_accepts_a_v1_enveloped_response() {
+        let response = serde_json::json!({"data": [{"_id": "abc"}]});
+        let id = created_id(ApiSurface::PrivateV1, "network", &response);
+        assert_eq!(id.expect("id"), "abc");
+    }
+
+    /// After a successful POST a parse failure is an orphan risk, and says so.
+    #[test]
+    fn created_id_without_an_id_warns_of_an_untracked_resource() {
+        let error = created_id(
+            ApiSurface::PrivateV2,
+            "firewall_policy",
+            &serde_json::json!({}),
+        )
+        .expect_err("no _id");
+        assert!(
+            error
+                .to_string()
+                .contains("without this change set tracking")
+        );
     }
 }

@@ -39,8 +39,11 @@ use super::preimage::{Preimage, StagedMutation};
 ///   the controller returns (`source`, `destination`, `protocol`, `schedule`,
 ///   ...) because a policy missing them is not a policy any more, and the
 ///   supported authoring loop is "read a working policy, change one field,
-///   stage it back". The extra names below are exactly the ones that policy's
-///   own round-trip test fixture carries.
+///   stage it back". The extra names below are the ones every policy a real
+///   controller returns carries (`create_allow_respond`, `icmp_typename`,
+///   `icmp_v6_typename`, `match_ip_sec`, `match_opposite_protocol`, and the
+///   optional `description`). Server-managed fields (`_id`, `hits`,
+///   `last_hit`, `origin_id`, `origin_type`) are deliberately not listed.
 ///
 ///   `predefined` stays in this list for the same reason, not by omission:
 ///   it is a named field on [`crate::model::firewall::FirewallPolicy`] (not
@@ -88,6 +91,12 @@ fn writable_fields(kind: ResourceKind) -> Option<&'static [&'static str]> {
             "connection_states",
             "ip_version",
             "logging",
+            "description",
+            "create_allow_respond",
+            "icmp_typename",
+            "icmp_v6_typename",
+            "match_ip_sec",
+            "match_opposite_protocol",
         ]),
         ResourceKind::TrafficRoute => Some(&["name"]),
         // MEC-509 added these as read-only kinds; no write route exists for
@@ -1057,6 +1066,34 @@ mod writable_fields_tests {
             }),
         );
         assert!(check_writable_fields(&[staged]).is_ok());
+    }
+
+    /// A policy as a real controller returns it, minus the server-managed
+    /// fields, must stage: the read-edit-restage loop has to work for every
+    /// policy, not just ones shaped like the synthetic fixture.
+    #[test]
+    fn a_real_controller_policy_stages_without_its_server_managed_fields() {
+        let inline = json!({
+            "name": "p", "action": "ALLOW", "enabled": true, "index": 1,
+            "predefined": false, "protocol": "all", "ip_version": "BOTH",
+            "logging": false, "connection_state_type": "ALL", "connection_states": [],
+            "schedule": { "mode": "ALWAYS" }, "source": {}, "destination": {},
+            "description": "d", "create_allow_respond": false, "icmp_typename": "ANY",
+            "icmp_v6_typename": "ANY", "match_ip_sec": false,
+            "match_opposite_protocol": false
+        });
+        let mut bodies = vec![inline];
+        for version in crate::testing::recorded_versions() {
+            let recorded = crate::testing::fixture(&version, "policies");
+            bodies.extend(recorded.as_array().cloned().unwrap_or_default());
+        }
+        for mut body in bodies {
+            for field in ["_id", "hits", "last_hit", "origin_id", "origin_type"] {
+                body.as_object_mut().expect("object").remove(field);
+            }
+            let staged = StagedMutation::create("firewall_policy", body);
+            assert!(check_writable_fields(&[staged]).is_ok());
+        }
     }
 
     /// Controller-managed identity fields must never be settable through a

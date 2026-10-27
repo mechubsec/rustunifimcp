@@ -699,11 +699,6 @@ pub async fn search(
     let limit = args.limit.unwrap_or(10);
 
     let site_uuid = client.default_site_for(ApiSurface::Supported).await?;
-    let site_name = if let Some(ref s) = args.site {
-        s.as_str()
-    } else {
-        client.default_site()
-    };
 
     let mut omitted = Vec::new();
     // Legs refused outright (permission/config), not merely capped. A capped
@@ -784,12 +779,14 @@ pub async fn search(
         Err(e) => return Err(e),
     }
 
-    // Search sites via Private v1 API
+    // Search sites via the Integration API list `unifi_list_sites` reads.
+    // Private v1 `/self` describes the logged-in admin, not the sites, and
+    // never parsed as a `Site`.
     match client
         .get(
-            ApiSurface::PrivateV1,
-            "/proxy/network/api/s/{site}/self",
-            &[("site", site_name)],
+            ApiSurface::Supported,
+            "/proxy/network/integration/v1/sites",
+            &[],
             &[],
         )
         .await
@@ -800,7 +797,7 @@ pub async fn search(
             sites_results = filter_by_query(&values, &args.query, limit as usize);
         }
         Err(UnifiError::SurfaceRequiresConfig { .. }) => {
-            omitted.push("sites: controller has allow_private_api disabled".to_owned());
+            omitted.push("sites: controller has Integration API disabled".to_owned());
             refused_legs += 1;
         }
         Err(UnifiError::SurfaceRequiresScope { .. }) => {
@@ -1076,7 +1073,7 @@ mod tests {
             "devices": [],
             "sites": [],
             "partial": true,
-            "omitted": ["sites: controller has allow_private_api disabled"]
+            "omitted": ["sites: controller has Integration API disabled"]
         });
 
         assert_eq!(

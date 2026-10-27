@@ -110,9 +110,9 @@ fn routes() -> Vec<Route> {
     let route = |path: String, body: serde_json::Value| Route { path, body };
 
     vec![
-        // unifi_list_sites, unifi_search (sites leg is `/self`, not this --
-        // this is also how `default_site_for(Supported)` resolves the site
-        // UUID every Integration API call needs).
+        // unifi_list_sites and unifi_search's sites leg -- this is also how
+        // `default_site_for(Supported)` resolves the site UUID every
+        // Integration API call needs.
         route("/proxy/network/integration/v1/sites".to_owned(), f("sites")),
         route(
             "/proxy/network/integration/v1/info".to_owned(),
@@ -242,9 +242,6 @@ fn routes() -> Vec<Route> {
             "/proxy/network/api/s/default/stat/health".to_owned(),
             f("health"),
         ),
-        // unifi_search's sites leg (Private v1 `/self`, distinct from the
-        // Integration API `/sites` list above).
-        route("/proxy/network/api/s/default/self".to_owned(), f("sites")),
     ]
 }
 
