@@ -430,8 +430,7 @@ impl UnifiClient {
                 .await;
         }
 
-        serde_json::from_slice(response.body())
-            .map_err(|error| UnifiError::Malformed(error.to_string()))
+        delete_response_body(response.body())
     }
 
     /// Map error responses to the correct `UnifiError` variant.
@@ -548,6 +547,18 @@ fn percent_encode(s: &str) -> String {
             }
         })
         .collect()
+}
+
+/// Parse a successful DELETE's body.
+///
+/// Private v2 answers a delete with an empty 2xx body. That is success, not a
+/// malformed response: parsing it as JSON reported every v2 delete (and the
+/// rollback of every v2 create) as failed after it had landed.
+fn delete_response_body(body: &[u8]) -> Result<serde_json::Value, UnifiError> {
+    if body.iter().all(u8::is_ascii_whitespace) {
+        return Ok(serde_json::Value::Null);
+    }
+    serde_json::from_slice(body).map_err(|error| UnifiError::Malformed(error.to_string()))
 }
 
 /// Extract the controller-assigned id from a create response.
@@ -1025,7 +1036,7 @@ impl crate::changeset::apply::ControllerOps for UnifiClient {
 
 #[cfg(test)]
 mod tests {
-    use super::{UnifiClient, created_id};
+    use super::{UnifiClient, created_id, delete_response_body};
     use crate::ApiSurface;
     use crate::inventory::Controller;
 
@@ -1164,6 +1175,23 @@ mod tests {
         let response = serde_json::json!({"data": [{"_id": "abc"}]});
         let id = created_id(ApiSurface::PrivateV1, "network", &response);
         assert_eq!(id.expect("id"), "abc");
+    }
+
+    /// A v2 delete's empty 2xx body is success; a v1 envelope still parses
+    /// and garbage is still an error.
+    #[test]
+    fn delete_response_body_treats_an_empty_body_as_success() {
+        assert_eq!(
+            delete_response_body(b"").expect("empty"),
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            delete_response_body(b" \n").expect("blank"),
+            serde_json::Value::Null
+        );
+        let enveloped = delete_response_body(br#"{"meta":{"rc":"ok"},"data":[]}"#);
+        assert_eq!(enveloped.expect("v1")["meta"]["rc"], "ok");
+        assert!(delete_response_body(b"<html>").is_err());
     }
 
     /// After a successful POST a parse failure is an orphan risk, and says so.
