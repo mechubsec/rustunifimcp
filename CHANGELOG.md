@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.6] - 2026-10-27
+
+### Fixed
+
+- A `firewall_policy`, `firewall_zone` or `traffic_route` delete no longer
+  reports failure (`EOF while parsing a value`) after it succeeded (#144).
+  Private v2 answers a delete with an empty body. The same fix applies to
+  rolling back a v2 create. On earlier versions, a v2 delete or rollback
+  marked `partial` most likely did land; check the controller.
+
+### Changed
+
+- The MCP registry entry's `config_dir` description now says that
+  `controllers.json`'s `api_key_file` must be the in-container path.
+- The Docker and LXC guides were corrected against a new-user run of 0.6.5
+  (#146). The Docker guide's `docker run` commands had failed as written.
+  The LXC guide now leads with the signed release tarball and has an
+  upgrade section.
+
 ## [0.6.5] - 2026-10-27
 
 Same code as 0.6.4; it re-releases with complete supply-chain metadata.
