@@ -12,7 +12,7 @@
 # Pinned to the multi-arch image index digest resolved on 2026-09-29 (covers
 # both linux/amd64 and linux/arm64; buildx picks the matching manifest for
 # whichever platform it is building under --platform).
-FROM rust:1.99-slim-trixie@sha256:4df2ae8cfdfebdfc13a65da7f253b73d68983dc0339f2719bc17a279c913b13d AS builder
+FROM rust:1.99-slim-trixie@sha256:1a939748a7cbab172de91a014e3804a97af1394a8c844faa67fce9401c4e40fb AS builder
 
 WORKDIR /build
 
@@ -45,7 +45,7 @@ RUN touch rustunifimcp/src/main.rs rustunifimcp-core/src/lib.rs && \
 # Already a multi-arch image index digest (covers linux/amd64 and
 # linux/arm64), resolved on 2026-08-24 -- confirmed again on 2026-09-29 while
 # adding the arm64 build (MEC-507); unchanged.
-FROM gcr.io/distroless/cc-debian13:nonroot@sha256:b7e81cb1af38d9345680e68bcf564d388f96304e25222030fc8c051faf8565b3
+FROM gcr.io/distroless/cc-debian13:nonroot@sha256:3ee00291cf386ec52a552e6a858d555debd74776eb4bfa53fa3df2cd6677515e
 
 # Run as nonroot user (UID 65532)
 USER 65532:65532

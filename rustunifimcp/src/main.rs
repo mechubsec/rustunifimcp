@@ -12,6 +12,7 @@ use rustunifimcp::cli::{TokenCli, TokenCommand, UnifiCli};
 use rustunifimcp::grant::UnifiGrant;
 use rustunifimcp::http_transport::build_http_router;
 use rustunifimcp::server::UnifiServer;
+use rustunifimcp_core::tools::WRITE_TOOLS;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
@@ -35,7 +36,9 @@ fn reject_combined_two_person_control_scope(tools: &[String]) -> Result<()> {
     if has(stage) && has(approve) {
         bail!(
             "refusing to grant a token both `{stage}` and `{approve}`: two-person control \
-             requires the staging and approving tokens to differ. Issue separate tokens."
+             requires the staging and approving tokens to differ. Issue separate tokens, or, for a \
+             single-operator server run with `--lab-mode`, pass `--allow-self-approval` to record \
+             the opt-in (a two-person server still refuses such a token at call time)."
         );
     }
     Ok(())
@@ -70,6 +73,54 @@ fn validate_token_command(command: &TokenCommand) -> Result<()> {
     }
 }
 
+/// Startup warnings about token scopes that are stale or will not work here.
+///
+/// One string per finding, so the caller logs one `warn!` line each. Takes
+/// `(name, tools, grant)` per token rather than store entries so it needs no
+/// running server. `self_approval` is informational: a hand-edited store that
+/// adds it silences the first warning and gains no authority.
+fn token_startup_warnings<'a>(
+    tokens: impl IntoIterator<Item = (&'a str, &'a ScopeSet, Option<&'a UnifiGrant>)>,
+    lab_mode: bool,
+    known_tools: &[&str],
+) -> Vec<String> {
+    let (stage, approve) = TWO_PERSON_CONTROL_TOOLS;
+    let mut warnings = Vec::new();
+    for (name, tools, grant) in tokens {
+        let combined =
+            tools.allows_tool(stage, WRITE_TOOLS) && tools.allows_tool(approve, WRITE_TOOLS);
+        if combined && !grant.is_some_and(|grant| grant.self_approval) {
+            warnings.push(format!(
+                "token '{name}' holds both `{stage}` and `{approve}` with no recorded opt-in: it \
+                 predates MEC-503 or was edited by hand; `token set-scope --allow-self-approval \
+                 --yes` records it"
+            ));
+        }
+        if combined && !lab_mode {
+            warnings.push(format!(
+                "token '{name}' holds both `{stage}` and `{approve}` but this server is not run \
+                 with --lab-mode: its stage/approve calls will be refused"
+            ));
+        }
+        // `*` never names a tool, so it cannot be stale.
+        let ScopeSet::Allowlist(names) = tools else {
+            continue;
+        };
+        let unknown: Vec<&str> = names
+            .iter()
+            .map(String::as_str)
+            .filter(|tool| !known_tools.contains(tool))
+            .collect();
+        if !unknown.is_empty() {
+            warnings.push(format!(
+                "token '{name}' names tools this server does not have: {}",
+                unknown.join(", ")
+            ));
+        }
+    }
+    warnings
+}
+
 /// Parse `--sites` into a [`UnifiGrant`].
 ///
 /// A single `*` means every site (`ScopeSet::Wildcard`); anything else is an
@@ -89,11 +140,36 @@ fn parse_sites(values: Vec<String>) -> Result<UnifiGrant> {
         }
         return Ok(UnifiGrant {
             sites: ScopeSet::Wildcard,
+            self_approval: false,
         });
     }
     Ok(UnifiGrant {
         sites: ScopeSet::Allowlist(values),
+        self_approval: false,
     })
+}
+
+/// The sites an existing token is restricted to, for a `set-scope` that records
+/// the self-approval opt-in without restating `--sites`.
+///
+/// A grantless token (unrestricted by site) and a token that is not in the
+/// store both come back as [`ScopeSet::Wildcard`]; the latter is then refused
+/// by `set-scope` itself as a nonexistent token.
+fn existing_sites(tokens_file: &Path, name: &str) -> Result<ScopeSet> {
+    let store_file =
+        mecmcp_auth::TokenStoreFile::<UnifiGrant>::load(tokens_file).with_context(|| {
+            format!(
+                "reading {} to preserve the token's sites",
+                tokens_file.display()
+            )
+        })?;
+    let sites = store_file
+        .store()
+        .entries()
+        .iter()
+        .find(|entry| entry.name == name)
+        .and_then(|entry| entry.grant.as_ref().map(|grant| grant.sites.clone()));
+    Ok(sites.unwrap_or(ScopeSet::Wildcard))
 }
 
 /// Convert `TokenCommand` to `TokenAction`, building a [`UnifiGrant`] from
@@ -105,6 +181,12 @@ fn parse_sites(values: Vec<String>) -> Result<UnifiGrant> {
 /// the pre-MEC-508 default) or, on `set-scope`, no change to the token's
 /// existing grant (`TokenStoreFile::set_scopes` keeps a `None` grant as "no
 /// change", never as "clear").
+///
+/// `--allow-self-approval` is persisted in the grant (`self_approval`). On
+/// `add` without `--sites` that is a `Wildcard` grant, which authorizes exactly
+/// what a grantless entry does. On `set-scope` the token's current sites are
+/// carried over so recording the opt-in never changes them. `set-scope
+/// --sites` replaces the whole grant, so repeat the flag to keep the opt-in.
 ///
 /// # Errors
 /// Returns an error if `--sites` fails to parse (see [`parse_sites`]).
@@ -121,11 +203,18 @@ fn token_command_to_action(command: TokenCommand) -> Result<(TokenAction, Option
             actor_type,
             oidc_issuer,
             oidc_subject,
-            allow_self_approval: _,
+            allow_self_approval,
             sites,
             server_pid,
         } => {
-            let grant = sites.map(parse_sites).transpose()?;
+            let mut grant = sites.map(parse_sites).transpose()?;
+            if allow_self_approval {
+                let recorded = grant.get_or_insert(UnifiGrant {
+                    sites: ScopeSet::Wildcard,
+                    self_approval: false,
+                });
+                recorded.self_approval = true;
+            }
             Ok((
                 TokenAction::Add {
                     tokens_file,
@@ -174,11 +263,22 @@ fn token_command_to_action(command: TokenCommand) -> Result<(TokenAction, Option
             devices,
             tools,
             yes,
-            allow_self_approval: _,
+            allow_self_approval,
             sites,
             server_pid,
         } => {
-            let grant = sites.map(parse_sites).transpose()?;
+            let mut grant = sites.map(parse_sites).transpose()?;
+            if allow_self_approval {
+                let mut recorded = match grant {
+                    Some(explicit) => explicit,
+                    None => UnifiGrant {
+                        sites: existing_sites(&tokens_file, &name)?,
+                        self_approval: false,
+                    },
+                };
+                recorded.self_approval = true;
+                grant = Some(recorded);
+            }
             Ok((
                 TokenAction::SetScopes {
                     tokens_file,
@@ -634,6 +734,17 @@ impl PendingTokenAudit {
         }
     }
 
+    /// Record that the token was issued or updated with `--allow-self-approval`.
+    fn emit_self_approval_opt_in(&self) {
+        tracing::info!(
+            target: "audit",
+            operation = self.operation,
+            token_name = self.token_name.as_str(),
+            self_approval = true,
+            "token opted into self-approval (one token may stage and approve)"
+        );
+    }
+
     /// Emit the record, carrying whether the mutation actually took effect.
     ///
     /// The failure branch records the error text so an auditor can tell a
@@ -744,6 +855,7 @@ async fn run_inner() -> Result<()> {
         // because the action is consumed by the call; the outcome is attached
         // afterwards.
         let pending = PendingTokenAudit::describe(&action);
+        let records_self_approval = grant.as_ref().is_some_and(|grant| grant.self_approval);
 
         let outcome = mecmcp_runtime::token_cmd::run_with_grant::<UnifiGrant>(
             action,
@@ -755,6 +867,10 @@ async fn run_inner() -> Result<()> {
 
         if let Some(pending) = pending {
             pending.emit(outcome.as_ref());
+            // The shared set-scope event carries no grant, so name the opt-in.
+            if records_self_approval && outcome.is_ok() {
+                pending.emit_self_approval_opt_in();
+            }
         }
 
         return outcome;
@@ -1101,7 +1217,18 @@ async fn serve_http(
 ) -> Result<()> {
     // Load token store if provided.
     let token_store = if let Some(ref path) = cli.common.tokens_file {
-        Some(Arc::new(mecmcp_auth::TokenStoreFile::load(path)?))
+        let store_file = mecmcp_auth::TokenStoreFile::<UnifiGrant>::load(path)?;
+        let entries = store_file.store();
+        let tokens = entries
+            .entries()
+            .iter()
+            .map(|entry| (entry.name.as_str(), &entry.tools, entry.grant.as_ref()));
+        for warning in
+            token_startup_warnings(tokens, cli.lab_mode(), rustunifimcp_core::tools::TOOL_NAMES)
+        {
+            tracing::warn!("{warning}");
+        }
+        Some(Arc::new(store_file))
     } else {
         None
     };
@@ -1384,6 +1511,57 @@ mod tests {
     fn no_otel_endpoint_starts_normally() {
         let args = make_cli(None, None);
         init_audit(&args).expect("no --otel-endpoint must not be refused");
+    }
+
+    fn both_scopes() -> ScopeSet {
+        ScopeSet::Allowlist(vec![
+            "unifi_stage_change".to_owned(),
+            "unifi_approve_change_set".to_owned(),
+        ])
+    }
+
+    const KNOWN: &[&str] = &["unifi_stage_change", "unifi_approve_change_set"];
+
+    fn warnings_for(tools: &ScopeSet, opted_in: bool, lab_mode: bool) -> Vec<String> {
+        let grant = UnifiGrant {
+            sites: ScopeSet::Wildcard,
+            self_approval: opted_in,
+        };
+        token_startup_warnings([("t", tools, Some(&grant))], lab_mode, KNOWN)
+    }
+
+    #[test]
+    fn legacy_combined_token_warns_about_the_missing_opt_in() {
+        let warnings = warnings_for(&both_scopes(), false, true);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("no recorded opt-in"), "{warnings:?}");
+    }
+
+    #[test]
+    fn grantless_combined_token_is_treated_as_unrecorded() {
+        let tools = both_scopes();
+        let warnings = token_startup_warnings([("t", &tools, None)], true, KNOWN);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+    }
+
+    #[test]
+    fn opted_in_token_is_quiet_on_lab_mode_and_warned_without_it() {
+        assert!(warnings_for(&both_scopes(), true, true).is_empty());
+        let warnings = warnings_for(&both_scopes(), true, false);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("will be refused"), "{warnings:?}");
+    }
+
+    #[test]
+    fn unknown_tool_is_named_and_wildcard_never_triggers() {
+        let stale = ScopeSet::Allowlist(vec![
+            "unifi_stage_change".to_owned(),
+            "unifi_run_speed_test".to_owned(),
+        ]);
+        let warnings = warnings_for(&stale, false, true);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("unifi_run_speed_test"), "{warnings:?}");
+        assert!(warnings_for(&ScopeSet::Wildcard, false, false).is_empty());
     }
 
     #[test]

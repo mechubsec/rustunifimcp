@@ -7,6 +7,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.5] - 2026-10-27
+
+Same code as 0.6.4; it re-releases with complete supply-chain metadata.
+
+### Fixed
+
+- The release workflow's signature gate now retries before failing. For
+  0.6.4 it checked the Docker Hub signature before Docker Hub served it,
+  so the run failed and the provenance attestations, SBOM attestations and
+  the MCP registry publish never ran. The 0.6.4 images are signed, but have
+  no attestations and are not in the MCP registry. Use 0.6.5.
+
+## [0.6.4] - 2026-10-27
+
+### Fixed
+
+- Creating a `firewall_policy`, `firewall_zone` or `traffic_route` no longer
+  reports a successful create as failed (#132). Apply expected the Private v2
+  POST to return a bare array, but it returns the created object. The
+  rejected create was also never rolled back. If an earlier apply of a v2
+  create came back `partial`, check the controller for a resource the change
+  set does not track.
+- `unifi_apply_change_set` now returns `apply_failure`, which names the
+  mutation that failed and the controller's error, and `verification_failure`.
+  Both are also on the `unifi_change_set_applied` audit event. Before this, a
+  failed apply gave no reason.
+- `firewall_policy` creates and updates may set `description`,
+  `create_allow_respond`, `icmp_typename`, `icmp_v6_typename`, `match_ip_sec`
+  and `match_opposite_protocol`. Every policy the controller returns carries
+  them, so editing a fetched policy and staging it back was always refused.
+  Drop the server-managed `_id`, `hits`, `last_hit`, `origin_id` and
+  `origin_type` before staging.
+- `unifi_search` no longer fails with `site parse failed: missing field
+  'id'`. Its sites leg now reads the Integration API sites list, the same one
+  `unifi_list_sites` uses.
+
+### Changed
+
+- `token add` / `token set-scope --allow-self-approval` now records the
+  opt-in on the token's grant (`self_approval: true`) and emits an audit
+  event for it (#126). It is informational only: call-time two-person
+  control is unchanged and still depends on `--lab-mode`. On
+  `set-scope`, the flag counts as widening the grant and needs `--yes`.
+- The refusal for a token holding both `unifi_stage_change` and
+  `unifi_approve_change_set` now names `--allow-self-approval`.
+- At startup the HTTP server warns about these tokens:
+  - a token holding both change-set scopes with no recorded opt-in;
+  - a token holding both scopes when the server is not run with `--lab-mode`;
+  - a token naming a tool this server no longer has.
+
+### Upgrade notes
+
+- After any token records `self_approval`, a pre-0.6.4 binary cannot load
+  that `tokens.json`. The grant schema refuses unknown fields. Roll back from
+  a snapshot, not by swapping the binary.
+
 ## [0.6.3] - 2026-10-26
 
 ### Security

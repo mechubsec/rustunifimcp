@@ -46,14 +46,14 @@ jobs:
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
 
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Log in to Docker Hub
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -161,14 +161,14 @@ jobs:
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
 
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Log in to Docker Hub
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -316,14 +316,25 @@ jobs:
           DIGEST: ${{ steps.build.outputs.digest }}
 
       - name: Verify signatures (hard gate) -- GHCR and Docker Hub
+        # Docker Hub can take seconds to serve a just-pushed signature: v0.6.4
+        # failed here with "no signatures found" for a signature that verified
+        # minutes later, skipping every attestation and the registry publish.
+        # Retry before failing; a signature that never appears still fails.
         run: |
           set -euo pipefail
           for ref in "ghcr.io/${REPO}@${DIGEST}" "docker.io/mechub/rustunifimcp@${DIGEST}"; do
-            echo "Verifying ${ref}"
-            cosign verify \
-              --certificate-identity-regexp "^https://github\.com/${REPO}/" \
-              --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-              "${ref}" > /dev/null
+            for attempt in 1 2 3 4 5 6; do
+              echo "Verifying ${ref} (attempt ${attempt})"
+              if cosign verify \
+                --certificate-identity-regexp "^https://github\.com/${REPO}/" \
+                --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+                "${ref}" > /dev/null; then
+                continue 2
+              fi
+              [ "$attempt" -lt 6 ] && sleep 15
+            done
+            echo "::error::no verifiable signature on ${ref} after 6 attempts" >&2
+            exit 1
           done
         env:
           REPO: ${{ github.repository }}

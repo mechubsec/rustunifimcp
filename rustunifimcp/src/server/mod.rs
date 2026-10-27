@@ -2194,6 +2194,8 @@ impl UnifiServer {
             attempted_and_failed = outcome.attempted_and_failed.len(),
             never_attempted = outcome.never_attempted.len(),
             rollback_failures = outcome.rollback_failures.len(),
+            apply_failure = outcome.apply_failure.as_deref().unwrap_or(""),
+            verification_failure = outcome.verification_failure.as_deref().unwrap_or(""),
             "change set applied"
         );
 
@@ -2254,6 +2256,8 @@ impl UnifiServer {
             "attempted_and_failed": outcome.attempted_and_failed.len(),
             "never_attempted": outcome.never_attempted.len(),
             "rollback_failures": outcome.rollback_failures,
+            "apply_failure": outcome.apply_failure,
+            "verification_failure": outcome.verification_failure,
         });
 
         tool_result(
@@ -2452,6 +2456,7 @@ mod tests {
     fn authorize_site_refuses_a_site_outside_the_grant() {
         let caller = caller_with_site_grant(Some(UnifiGrant {
             sites: mecmcp_auth::ScopeSet::Allowlist(vec!["site-a".to_owned()]),
+            self_approval: false,
         }));
         assert!(UnifiServer::authorize_site(Some(&caller), "site-b").is_err());
     }
@@ -2461,6 +2466,7 @@ mod tests {
     fn authorize_site_permits_each_site_in_a_multi_site_grant() {
         let caller = caller_with_site_grant(Some(UnifiGrant {
             sites: mecmcp_auth::ScopeSet::Allowlist(vec!["site-a".to_owned(), "site-b".to_owned()]),
+            self_approval: false,
         }));
         assert!(UnifiServer::authorize_site(Some(&caller), "site-a").is_ok());
         assert!(UnifiServer::authorize_site(Some(&caller), "site-b").is_ok());
@@ -2489,6 +2495,7 @@ mod tests {
     fn authorize_site_permits_any_site_with_a_wildcard_grant() {
         let caller = caller_with_site_grant(Some(UnifiGrant {
             sites: mecmcp_auth::ScopeSet::Wildcard,
+            self_approval: false,
         }));
         assert!(UnifiServer::authorize_site(Some(&caller), "site-a").is_ok());
         assert!(UnifiServer::authorize_site(Some(&caller), "site-z").is_ok());
