@@ -24,6 +24,18 @@ pub struct UnifiGrant {
     /// Sites this token may write to. [`ScopeSet::Wildcard`] permits every
     /// site; an allowlist permits only the named sites.
     pub sites: ScopeSet,
+    /// Records that the operator minted this token with `--allow-self-approval`
+    /// (MEC-503). Informational only: it grants no authority and is never
+    /// consulted at call time, so editing it into a token file only silences
+    /// the startup warning about unrecorded combined scopes.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub self_approval: bool,
+}
+
+/// `skip_serializing_if` helper: keep tokens without the opt-in byte-identical
+/// to what earlier releases wrote.
+fn is_false(value: &bool) -> bool {
+    !value
 }
 
 impl Grant for UnifiGrant {
@@ -55,6 +67,7 @@ mod tests {
     fn wildcard_allows_any_site() {
         let grant = UnifiGrant {
             sites: ScopeSet::Wildcard,
+            self_approval: false,
         };
         assert!(grant.allows_subject("site-a"));
         assert!(grant.allows_subject("site-b"));
@@ -64,6 +77,7 @@ mod tests {
     fn allowlist_allows_only_named_sites() {
         let grant = UnifiGrant {
             sites: ScopeSet::Allowlist(vec!["site-a".to_owned()]),
+            self_approval: false,
         };
         assert!(grant.allows_subject("site-a"));
         assert!(!grant.allows_subject("site-b"));
@@ -73,6 +87,7 @@ mod tests {
     fn allowlist_permits_each_of_its_multiple_sites() {
         let grant = UnifiGrant {
             sites: ScopeSet::Allowlist(vec!["site-a".to_owned(), "site-b".to_owned()]),
+            self_approval: false,
         };
         assert!(grant.allows_subject("site-a"));
         assert!(grant.allows_subject("site-b"));
@@ -83,6 +98,7 @@ mod tests {
     fn validate_rejects_a_malformed_scope() {
         let grant = UnifiGrant {
             sites: ScopeSet::Allowlist(vec!["dup".to_owned(), "dup".to_owned()]),
+            self_approval: false,
         };
         assert!(grant.validate().is_err());
     }
@@ -91,7 +107,37 @@ mod tests {
     fn validate_accepts_wildcard() {
         let grant = UnifiGrant {
             sites: ScopeSet::Wildcard,
+            self_approval: false,
         };
         assert!(grant.validate().is_ok());
+    }
+
+    #[test]
+    fn a_grant_written_before_self_approval_loads_as_false() {
+        let grant: UnifiGrant = serde_json::from_str(r#"{"sites":["*"]}"#).expect("valid");
+        assert!(!grant.self_approval);
+    }
+
+    #[test]
+    fn false_is_not_serialized_and_true_round_trips() {
+        let plain = UnifiGrant {
+            sites: ScopeSet::Wildcard,
+            self_approval: false,
+        };
+        assert_eq!(
+            serde_json::to_string(&plain).expect("valid"),
+            r#"{"sites":["*"]}"#
+        );
+
+        let opted_in = UnifiGrant {
+            self_approval: true,
+            ..plain
+        };
+        let json = serde_json::to_string(&opted_in).expect("valid");
+        assert_eq!(json, r#"{"sites":["*"],"self_approval":true}"#);
+        assert_eq!(
+            serde_json::from_str::<UnifiGrant>(&json).expect("valid"),
+            opted_in
+        );
     }
 }

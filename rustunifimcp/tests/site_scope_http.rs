@@ -72,6 +72,7 @@ fn mint_token(path: &std::path::Path, name: &str, sites: Option<Vec<String>>) ->
     };
     let grant = sites.map(|sites| UnifiGrant {
         sites: ScopeSet::Allowlist(sites),
+        self_approval: false,
     });
     let secret = TokenStoreFile::<UnifiGrant>::add_with_options(
         path,

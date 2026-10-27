@@ -281,6 +281,124 @@ fn token_add_with_both_scopes_and_allow_self_approval_is_accepted() {
     );
 }
 
+/// Reads the stored entry named `name` from a tokens file.
+fn stored_entry(path: &std::path::Path, name: &str) -> serde_json::Value {
+    let raw = std::fs::read_to_string(path).expect("read tokens file");
+    let parsed: serde_json::Value = serde_json::from_str(&raw).expect("tokens file is JSON");
+    parsed["tokens"]
+        .as_array()
+        .expect("tokens array")
+        .iter()
+        .find(|entry| entry["name"] == name)
+        .unwrap_or_else(|| panic!("token {name} not stored: {raw}"))
+        .clone()
+}
+
+/// Issue #126: the opt-in is recorded on the token, and a token minted
+/// without it carries no `self_approval` key at all.
+#[test]
+fn token_add_records_self_approval_only_when_opted_in() {
+    let tokens = tokens_file();
+    let path = tokens.path().to_str().expect("utf-8 path");
+    let both = "unifi_stage_change,unifi_approve_change_set";
+    let opted = run(&[
+        "token",
+        "add",
+        "--tokens-file",
+        path,
+        "--name",
+        "lab-operator",
+        "--devices",
+        "*",
+        "--tools",
+        both,
+        "--allow-self-approval",
+    ]);
+    assert!(opted.status.success(), "{}", stderr_of(&opted));
+    let plain = run(&[
+        "token",
+        "add",
+        "--tokens-file",
+        path,
+        "--name",
+        "stager",
+        "--devices",
+        "*",
+        "--tools",
+        "unifi_stage_change",
+    ]);
+    assert!(plain.status.success(), "{}", stderr_of(&plain));
+
+    let opted_grant = &stored_entry(tokens.path(), "lab-operator")["grant"];
+    assert_eq!(opted_grant["self_approval"], true);
+    assert_eq!(opted_grant["sites"], serde_json::json!(["*"]));
+    assert!(stored_entry(tokens.path(), "stager").get("grant").is_none());
+}
+
+/// `set-scope --allow-self-approval` without `--sites` records the opt-in and
+/// keeps the token's existing sites.
+#[test]
+fn token_set_scope_records_self_approval_and_preserves_sites() {
+    let tokens = tokens_file();
+    let path = tokens.path().to_str().expect("utf-8 path");
+    let minted = run(&[
+        "token",
+        "add",
+        "--tokens-file",
+        path,
+        "--name",
+        "op",
+        "--devices",
+        "*",
+        "--tools",
+        "unifi_stage_change",
+        "--sites",
+        "site-a",
+    ]);
+    assert!(minted.status.success(), "{}", stderr_of(&minted));
+
+    let updated = run(&[
+        "token",
+        "set-scope",
+        "--tokens-file",
+        path,
+        "--name",
+        "op",
+        "--tools",
+        "unifi_stage_change,unifi_approve_change_set",
+        "--allow-self-approval",
+        "--yes",
+    ]);
+    assert!(updated.status.success(), "{}", stderr_of(&updated));
+
+    let grant = &stored_entry(tokens.path(), "op")["grant"];
+    assert_eq!(grant["self_approval"], true);
+    assert_eq!(grant["sites"], serde_json::json!(["site-a"]));
+}
+
+/// The refusal tells a lab-mode operator how to opt in.
+#[test]
+fn combined_scope_refusal_names_the_opt_in() {
+    let tokens = tokens_file();
+    let output = run(&[
+        "token",
+        "add",
+        "--tokens-file",
+        tokens.path().to_str().expect("utf-8 path"),
+        "--name",
+        "x",
+        "--devices",
+        "*",
+        "--tools",
+        "unifi_stage_change,unifi_approve_change_set",
+    ]);
+    let stderr = stderr_of(&output);
+    assert!(
+        stderr.contains("--allow-self-approval") && stderr.contains("--lab-mode"),
+        "{stderr}"
+    );
+}
+
 /// Every shared refusal fixture must reach stderr exactly as the shared
 /// validator words it, so this server cannot drift from the rest of the
 /// family again. See mecmcp#358.
