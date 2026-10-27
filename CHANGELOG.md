@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.5] - 2026-10-27
+
+Same code as 0.6.4; it re-releases with complete supply-chain metadata.
+
+### Fixed
+
+- The release workflow's signature gate now retries before failing. For
+  0.6.4 it checked the Docker Hub signature before Docker Hub served it,
+  so the run failed and the provenance attestations, SBOM attestations and
+  the MCP registry publish never ran. The 0.6.4 images are signed, but have
+  no attestations and are not in the MCP registry. Use 0.6.5.
+
 ## [0.6.4] - 2026-10-27
 
 ### Fixed

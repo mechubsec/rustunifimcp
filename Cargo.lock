@@ -2341,7 +2341,7 @@ dependencies = [
 
 [[package]]
 name = "rustunifimcp"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "anyhow",
  "axum",
@@ -2374,7 +2374,7 @@ dependencies = [
 
 [[package]]
 name = "rustunifimcp-core"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "mecmcp-changeset",
  "mecmcp-http",
