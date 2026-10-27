@@ -37,7 +37,7 @@ configuration and nothing else, which makes it the real test of whether
 
 **In daily use on the maintainer's infrastructure (alpha). The dependency on the legacy server is retired.**
 
-`rustunifimcp` v0.6.5 serves the full surface — reads, workflows, operational
+`rustunifimcp` v0.6.6 serves the full surface — reads, workflows, operational
 actions, and change control — over TLS from two production guests: LXC 981 in lab
 mode and LXC 982 under two-person control.
 The `unifi-mcp-legacy` registration is gone; nothing routes to the Python
