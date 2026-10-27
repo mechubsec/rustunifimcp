@@ -2194,6 +2194,8 @@ impl UnifiServer {
             attempted_and_failed = outcome.attempted_and_failed.len(),
             never_attempted = outcome.never_attempted.len(),
             rollback_failures = outcome.rollback_failures.len(),
+            apply_failure = outcome.apply_failure.as_deref().unwrap_or(""),
+            verification_failure = outcome.verification_failure.as_deref().unwrap_or(""),
             "change set applied"
         );
 
@@ -2254,6 +2256,8 @@ impl UnifiServer {
             "attempted_and_failed": outcome.attempted_and_failed.len(),
             "never_attempted": outcome.never_attempted.len(),
             "rollback_failures": outcome.rollback_failures,
+            "apply_failure": outcome.apply_failure,
+            "verification_failure": outcome.verification_failure,
         });
 
         tool_result(

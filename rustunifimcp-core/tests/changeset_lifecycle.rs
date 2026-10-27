@@ -36,6 +36,7 @@ async fn a_clean_apply_reports_applied() {
     assert_eq!(outcome.state, State::Applied);
     assert_eq!(outcome.succeeded.len(), 5);
     assert!(outcome.failed.is_empty());
+    assert!(outcome.apply_failure.is_none());
 }
 
 #[tokio::test]
@@ -53,6 +54,14 @@ async fn a_failure_midway_reports_partial_and_names_both_sides() {
     // The distinction matters to whoever cleans up.
     assert_eq!(outcome.attempted_and_failed.len(), 1);
     assert_eq!(outcome.never_attempted.len(), 2);
+    let reason = outcome
+        .apply_failure
+        .expect("a failed mutation must say why");
+    assert!(
+        reason.starts_with("mutation 2 (update network id3)"),
+        "{reason}"
+    );
+    assert!(reason.contains("mock failure at mutation 3"), "{reason}");
 }
 
 #[tokio::test]

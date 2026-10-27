@@ -28,6 +28,12 @@ pub struct Outcome {
     /// naming which resource failed and why, that is not actionable at the
     /// hour someone is usually reading it.
     pub verification_failure: Option<String>,
+    /// Why the mutation that failed did not apply, when one did not.
+    ///
+    /// Set only when a mutation was attempted and failed, naming its index,
+    /// what it was and the controller's error. Without it a failed apply says
+    /// which mutation failed but never why.
+    pub apply_failure: Option<String>,
 }
 
 /// The state of a change set after apply.
@@ -73,12 +79,14 @@ where
             never_attempted: mutations.to_vec(),
             rollback_failures: Vec::new(),
             verification_failure: None,
+            apply_failure: None,
         };
     }
 
     let mut succeeded = Vec::new();
     let mut attempted_and_failed = Vec::new();
     let mut never_attempted = Vec::new();
+    let mut apply_failure = None;
     let mut created_ids: std::collections::HashMap<usize, String> =
         std::collections::HashMap::new();
 
@@ -91,8 +99,12 @@ where
                     created_ids.insert(index, id);
                 }
             }
-            Err(_) => {
+            Err(error) => {
                 // This mutation failed
+                apply_failure = Some(format!(
+                    "mutation {index} ({}): {error}",
+                    mutation.preview()
+                ));
                 attempted_and_failed.push(mutation.clone());
                 // Everything after this is never attempted
                 never_attempted.extend(mutations[index + 1..].iter().cloned());
@@ -116,6 +128,7 @@ where
             never_attempted: Vec::new(),
             rollback_failures: Vec::new(),
             verification_failure,
+            apply_failure: None,
         };
     }
 
@@ -135,6 +148,7 @@ where
             never_attempted,
             rollback_failures: Vec::new(),
             verification_failure: None,
+            apply_failure,
         },
         Err(rollback_failures) => Outcome {
             state: State::PartialRollbackFailed,
@@ -144,6 +158,7 @@ where
             never_attempted,
             rollback_failures,
             verification_failure: None,
+            apply_failure,
         },
     }
 }
