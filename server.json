@@ -32,7 +32,7 @@
           "isRequired": true,
           "variables": {
             "config_dir": {
-              "description": "Absolute host directory with controllers.json and the controller API key file (owned by UID 65532, mode 0600)",
+              "description": "Absolute host directory with controllers.json and the controller API key file (owned by UID 65532, mode 0600); api_key_file in controllers.json must be the in-container path, e.g. /etc/unifimcp/api.key",
               "format": "filepath",
               "isRequired": true
             }

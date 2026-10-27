@@ -8,7 +8,7 @@ Two rigs are normally built as a pair, because they test different things:
 
 | mode | approvals | use it for |
 |---|---|---|
-| **lab mode** (`--lab-mode`) | waived on creation, recorded as `approval_waiver=lab-mode` | ordinary tool work, reads, single-operator change sets |
+| **lab mode** (`--lab-mode`) | the same token may stage and approve; the approval records `approver: null`, `approval_waiver: "lab-mode"` | ordinary tool work, reads, single-operator change sets |
 | **two-person** (no flag) | a second principal must approve before apply | anything that must prove the approval gate holds |
 
 Never point a lab-mode server at production controllers. It says so itself at
@@ -46,21 +46,45 @@ glibc is forward-incompatible: a binary linked against a newer glibc will not
 start on an older one, and it fails at service start with a loader error *after*
 the old binary has been replaced — an outage, not a build failure.
 
-Take the binary from the release image, which CI builds against the right glibc:
+**Recommended: the signed release tarball.** Every GitHub release has carried
+one since 0.6.2. It already has the layout step 2 describes, `BUILD-INFO`
+included, so after verifying it, skip to step 4.
 
 ```bash
-docker create --name ux ghcr.io/mechubsec/rustunifimcp:0.4.0
+gh release download v0.6.5 -R mechubsec/rustunifimcp
+sha256sum -c rustunifimcp_0.6.5_amd64.tar.gz.sha256
+cosign verify-blob \
+  --bundle rustunifimcp_0.6.5_amd64.tar.gz.cosign.bundle \
+  --certificate-identity-regexp '^https://github\.com/mechubsec/mecmcp/\.github/workflows/reusable-sign-release-tarball\.yml@' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-github-workflow-repository mechubsec/rustunifimcp \
+  --certificate-github-workflow-ref refs/tags/v0.6.5 \
+  rustunifimcp_0.6.5_amd64.tar.gz
+```
+
+The identity is `mechubsec/mecmcp`'s reusable workflow because that is what signs
+the tarball, so the certificate SAN names it. The repository and ref flags pin
+the signature to this repo and this tag; a wrong repo or tag fails with "no
+matching CertificateIdentity found".
+
+**Fallback, for a build with no release** (for example testing an unreleased
+commit): take the binary from the image, which CI builds against the right
+glibc, then assemble the package with step 2.
+
+```bash
+docker create --name ux ghcr.io/mechubsec/rustunifimcp:0.6.5
 docker cp ux:/usr/local/bin/rustunifimcp ./rustunifimcp
 docker rm ux
 ```
 
-No docker? `skopeo copy docker://ghcr.io/mechubsec/rustunifimcp:0.4.0 dir:/tmp/img`
+No docker? `skopeo copy docker://ghcr.io/mechubsec/rustunifimcp:0.6.5 dir:/tmp/img`
 then find the layer containing `usr/local/bin/rustunifimcp` and untar it.
 
 ## 2. Assemble the install package
 
-Place the binary from the release image where the packager expects a prebuilt
-release binary, then pack it. `UNIFIMCP_PACKAGE_SKIP_BUILD=1` tells
+Skip this step if you downloaded the release tarball. Otherwise place the
+binary from the release image where the packager expects a prebuilt release
+binary, then pack it. `UNIFIMCP_PACKAGE_SKIP_BUILD=1` tells
 `scripts/package-lxc.sh` not to compile, and to record that fact in
 `BUILD-INFO` instead of naming a toolchain that did not produce the binary.
 
@@ -72,7 +96,7 @@ UNIFIMCP_PACKAGE_SKIP_BUILD=1 ./scripts/package-lxc.sh
 ```
 
 The tarball lands in `dist/rustunifimcp_<version>_<arch>.tar.gz` (this tree
-produces `dist/rustunifimcp_0.5.0_amd64.tar.gz`). Its layout, under a single
+produces `dist/rustunifimcp_0.6.5_amd64.tar.gz`). Its layout, under a single
 top-level directory `rustunifimcp_<version>_<arch>/`:
 
 ```
@@ -113,8 +137,11 @@ guest as safe to destroy, and the fleet's own safety rules key on it.
 
 ## 4. Install
 
+Push the downloaded tarball (step 1), or `dist/rustunifimcp_<version>_<arch>.tar.gz`
+if you built it in step 2:
+
 ```bash
-pct push 622 dist/rustunifimcp_0.5.0_amd64.tar.gz /tmp/pkg.tar.gz
+pct push 622 rustunifimcp_0.6.5_amd64.tar.gz /tmp/pkg.tar.gz
 pct exec 622 -- bash -lc 'rm -rf /tmp/unifimcp-pkg && mkdir /tmp/unifimcp-pkg && cd /tmp/unifimcp-pkg && tar xzf /tmp/pkg.tar.gz && cd rustunifimcp_*_* && sh packaging/lxc/install.sh'
 ```
 
@@ -248,11 +275,16 @@ The secret is printed **once** and stored hashed. Two things worth knowing:
 - For a token that will call `unifi_approve_change_set`, add `--actor-type
   human`; agent and unattributed callers are refused.
 - **Two-person control is enforced on tokens.** A token whose scope combines
-  `unifi_stage_change` and `unifi_approve_change_set` is refused at issuance and,
-  if one reaches the store anyway, at call time. Issue separate staging and
+  `unifi_stage_change` and `unifi_approve_change_set` is refused at issuance
+  ("refusing to grant a token both ...") and, if one reaches the store anyway,
+  at call time on a server without `--lab-mode`. Issue separate staging and
   approving tokens. The one exception is a **lab-mode** single operator: mint the
   combined token with `--allow-self-approval` and run the server with
-  `--lab-mode`; the self-approval is then recorded as `approval_waiver=lab-mode`.
+  `--lab-mode`. Since 0.6.4 the opt-in is recorded on the token's grant
+  (`"self_approval": true`, plus an audit event), and the HTTP server warns at
+  startup about a combined token with no recorded opt-in, or on a server without
+  `--lab-mode`. A combined token still needs `--actor-type human` to approve; the
+  approval records `approval_waiver=lab-mode`.
 
 ## 8. Verify
 
@@ -302,6 +334,25 @@ stopped again at completion:
 ```bash
 pct shutdown 622  # shutdown, not stop — stop kills mid-write, shutdown flushes change-set state
 ```
+
+## Upgrading
+
+When `packaging/` is unchanged since the installed release, swap only the binary.
+Take it from the verified tarball (step 1), check it against `BUILD-INFO`, then
+push it in, install and restart:
+
+```bash
+tar xzf rustunifimcp_0.6.5_amd64.tar.gz
+grep binary_sha256 rustunifimcp_0.6.5_amd64/BUILD-INFO
+sha256sum rustunifimcp_0.6.5_amd64/rustunifimcp          # must match
+pct push 622 rustunifimcp_0.6.5_amd64/rustunifimcp /tmp/rustunifimcp --perms 0755
+pct exec 622 -- install -m 0755 /tmp/rustunifimcp /usr/local/bin/rustunifimcp
+pct exec 622 -- systemctl restart rustunifimcp
+```
+
+Then re-run the checks in step 8 (version, `Seccomp: 2`, 401). When `packaging/`
+changed, re-run `install.sh` from the new tarball instead. A newly minted token
+still needs a SIGHUP (see step 7).
 
 ## Rebuilding an existing rig
 
