@@ -167,6 +167,6 @@ jobs:
       # caller, never widened, so this job must grant them itself -- see
       # mecmcp's docs/RELEASE-WORKFLOWS.md.
       id-token: write
-    uses: mechubsec/mecmcp/.github/workflows/reusable-sign-release-tarball.yml@982b4d3e8cc660c97fe99826febac1476542cce5 # v0.28.2
+    uses: mechubsec/mecmcp/.github/workflows/reusable-sign-release-tarball.yml@39e7308cda922dadad18a0b0a5775ec1ab4a0bca # v0.32.0
     with:
       tag: ${{ needs.resolve-tag.outputs.tag }}
