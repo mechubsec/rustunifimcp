@@ -45,6 +45,54 @@ pub struct Network {
     /// Secondary WAN IPv6 DNS server (for WAN networks).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wan_ipv6_dns2: Option<String>,
+    /// Firewall zone the network belongs to.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub firewall_zone_id: Option<String>,
+    /// DNS domain name handed out to clients.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub domain_name: Option<String>,
+    /// Whether VLAN tagging is enabled.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vlan_enabled: Option<bool>,
+    /// Network group (e.g., `"LAN"`, `"WAN"`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub networkgroup: Option<String>,
+    /// Whether the network is enabled.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    /// Whether IGMP snooping is enabled.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub igmp_snooping: Option<bool>,
+    /// Whether the network has internet access.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub internet_access_enabled: Option<bool>,
+    /// Whether the network is isolated from other networks.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub network_isolation_enabled: Option<bool>,
+    /// Whether DHCP hands out custom DNS servers.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dhcpd_dns_enabled: Option<bool>,
+    /// First custom DHCP DNS server.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dhcpd_dns_1: Option<String>,
+    /// Second custom DHCP DNS server.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dhcpd_dns_2: Option<String>,
+    /// Third custom DHCP DNS server.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dhcpd_dns_3: Option<String>,
+    /// Fourth custom DHCP DNS server.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dhcpd_dns_4: Option<String>,
+    /// DHCP lease time in seconds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dhcpd_leasetime: Option<u64>,
+    /// Whether the controller refuses to delete this network (built-in default).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attr_no_delete: Option<bool>,
+    /// WAN connection type (for WAN networks, e.g., `"dhcp"`, `"pppoe"`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wan_type: Option<String>,
 }
 
 /// A wireless network (WLAN).
@@ -100,6 +148,12 @@ pub struct DhcpReservation {
     /// Hostname.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hostname: Option<String>,
+    /// Whether the client has a fixed-IP reservation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub use_fixedip: Option<bool>,
+    /// ID of the network the reservation belongs to.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub network_id: Option<String>,
 }
 
 /// A RADIUS profile.

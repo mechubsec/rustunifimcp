@@ -8,6 +8,7 @@
       "mac": "02:00:00:02:01:01",
       "use_fixedip": true,
       "fixed_ip": "192.0.2.50",
+      "network_id": "000000000000000000000001",
       "hostname": "client-01"
     },
     {

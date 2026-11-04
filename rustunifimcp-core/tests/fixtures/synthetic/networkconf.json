@@ -8,7 +8,22 @@
       "vlan": 10,
       "dhcpd_enabled": true,
       "dhcpd_start": "192.0.2.100",
-      "dhcpd_stop": "192.0.2.200"
+      "dhcpd_stop": "192.0.2.200",
+      "firewall_zone_id": "000000000000000000000101",
+      "domain_name": "test.example",
+      "vlan_enabled": true,
+      "networkgroup": "LAN",
+      "enabled": true,
+      "igmp_snooping": false,
+      "internet_access_enabled": true,
+      "network_isolation_enabled": false,
+      "dhcpd_dns_enabled": true,
+      "dhcpd_dns_1": "192.0.2.1",
+      "dhcpd_dns_2": "192.0.2.2",
+      "dhcpd_dns_3": "192.0.2.3",
+      "dhcpd_dns_4": "192.0.2.4",
+      "dhcpd_leasetime": 86400,
+      "attr_no_delete": false
     },
     {
       "_id": "000000000000000000000002",
