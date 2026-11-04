@@ -1,14 +1,14 @@
 //! Change-set lifecycle tools.
 //!
 //! UniFi Network has no candidate configuration, no dry-run validation, and no
-//! checkpoint to roll back to. The seven tools below implement the change-control
+//! checkpoint to roll back to. The eight tools below implement the change-control
 //! lifecycle over UniFi's immediate-write REST API as a best-effort approximation,
 //! with explicit honesty about what cannot be guaranteed.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-/// Tool descriptions for all seven change-set tools.
+/// Tool descriptions for all eight change-set tools.
 ///
 /// Written here so the honesty tests in `changeset/mod.rs` can run before the
 /// handlers exist. Task 27 registers handlers against these same names.
@@ -64,6 +64,13 @@ pub const DESCRIPTIONS: &[(&str, &str)] = &[
         "Returns the current status and contents of a change set: pending, applied, \
          failed, partial, or rolled back. Includes the fingerprint, staged changes, \
          any apply outcome, and whether rollback is available.",
+    ),
+    (
+        "unifi_cancel_change_set",
+        "Cancels a planned, approved or expired change set, so its owner can create \
+         another. Only the owner or the approver may cancel. The record is kept as \
+         `cancelled`. A set that has started applying, including a failed or partial \
+         apply, cannot be cancelled.",
     ),
 ];
 
@@ -171,5 +178,14 @@ pub struct GetChangeSetArgs {
     /// The controller to target.
     pub controller: String,
     /// The change set ID to retrieve.
+    pub change_set_id: String,
+}
+
+/// Arguments for `unifi_cancel_change_set`.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub struct CancelChangeSetArgs {
+    /// The controller to target.
+    pub controller: String,
+    /// The change set ID to cancel.
     pub change_set_id: String,
 }

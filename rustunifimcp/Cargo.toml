@@ -43,6 +43,9 @@ tempfile = "3"
 mecmcp-transport = { workspace = true, features = ["test-util"] }
 # Test-only: the shared CLI refusal fixtures live behind `test-util`.
 mecmcp-runtime = { workspace = true, features = ["test-util"] }
+# Test-only: seeds a `Failed` change set, a state the public API only reaches
+# through a real apply, to prove `unifi_cancel_change_set` refuses it.
+mecmcp-changeset = { workspace = true, features = ["test-util"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 # Test-only: the redaction sweep (tests/redaction_sweep.rs) stands up a mock
 # UniFi controller over a real TLS listener rather than asserting on

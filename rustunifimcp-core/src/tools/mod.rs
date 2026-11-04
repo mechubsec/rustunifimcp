@@ -1,6 +1,6 @@
 //! The MCP tool surface.
 //!
-//! 22 tools, against roughly 270 on the server this replaces. The shape
+//! 23 tools, against roughly 270 on the server this replaces. The shape
 //! follows the mechub family: typed primitives, a change-control lifecycle, and
 //! a small number of workflows that earn their names.
 //!
@@ -43,7 +43,7 @@ pub const TOOL_NAMES: &[&str] = &[
     "unifi_topology_report",
     "unifi_traffic_flow_report",
     "unifi_client_troubleshoot",
-    // Change sets (7)
+    // Change sets (8)
     "unifi_create_change_set",
     "unifi_stage_change",
     "unifi_diff_change_set",
@@ -51,6 +51,7 @@ pub const TOOL_NAMES: &[&str] = &[
     "unifi_approve_change_set",
     "unifi_apply_change_set",
     "unifi_get_change_set",
+    "unifi_cancel_change_set",
 ];
 
 /// The mutating tools, passed to `mecmcp_server::authorize_call`.
@@ -75,4 +76,5 @@ pub const WRITE_TOOLS: &[&str] = &[
     "unifi_approve_change_set",
     "unifi_apply_change_set",
     "unifi_get_change_set",
+    "unifi_cancel_change_set",
 ];

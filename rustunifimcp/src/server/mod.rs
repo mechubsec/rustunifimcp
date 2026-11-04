@@ -683,8 +683,8 @@ impl UnifiServer {
             })
         {
             return Err(Box::new(tool_error(format!(
-                "change set {} on '{}' is still {}; finish or cancel it before creating \
-                 another",
+                "change set {} on '{}' is still {}; finish it or cancel it with \
+                 unifi_cancel_change_set before creating another",
                 blocker.id,
                 draft.controller,
                 blocker.state.as_str()
@@ -1630,6 +1630,15 @@ impl UnifiServer {
         // neither ordering of the two is safe on its own.
         let _publishing = self.plan_lock.lock().await;
 
+        // A cancel holds the same lock, so it may have dropped this draft while
+        // the pre-image was being read. Storing the plan now would resurrect it.
+        if self.draft(&args.change_set_id, &args.controller).is_none() {
+            return tool_error(
+                "change set was cancelled or lapsed while it was being staged; create a \
+                 new one",
+            );
+        }
+
         // The plan exists now, so the change set does too. `insert_change_set`
         // is what enforces one pending set per principal per controller.
         // `unifi_stage_change` never updates an existing record -- the guard
@@ -2356,6 +2365,139 @@ impl UnifiServer {
 
         tool_result(
             Ok::<_, String>(result),
+            ResultFormat::PrettyJson,
+            RESULT_LIMITS,
+            OutputRedaction::Apply,
+        )
+    }
+
+    #[tool(
+        name = "unifi_cancel_change_set",
+        description = "Cancels a planned, approved or expired change set, so its owner can \
+                       create another. Only the owner or the approver may cancel. The \
+                       record is kept as `cancelled`. A set that has started applying, \
+                       including a failed or partial apply, cannot be cancelled."
+    )]
+    async fn unifi_cancel_change_set(
+        &self,
+        Parameters(args): Parameters<changeset::CancelChangeSetArgs>,
+        context: RequestContext<RoleServer>,
+    ) -> CallToolResult {
+        let caller = Self::caller(&context);
+        if let Err(error) = authorize_call(
+            caller.as_ref(),
+            "unifi_cancel_change_set",
+            Some(&args.controller),
+            WRITE_TOOLS,
+        ) {
+            return tool_error(error);
+        }
+        let principal = Self::principal(caller.as_ref());
+
+        // The lock stage and approve hold, so a stage cannot store a draft
+        // this drops.
+        let _cancelling = self.plan_lock.lock().await;
+
+        // A draft has no record to move to `cancelled`; dropping it is the cancel.
+        if let Some(draft) = self.draft(&args.change_set_id, &args.controller) {
+            if draft.owner != principal {
+                return tool_error("only the change-set owner may cancel a draft");
+            }
+            self.release_draft(&args.change_set_id);
+            tracing::info!(
+                target: "audit",
+                event = "unifi_change_set_cancelled",
+                change_set_id = %args.change_set_id,
+                controller = %args.controller,
+                principal = %principal,
+                previous_state = "draft",
+                "change set cancelled"
+            );
+            return tool_result(
+                Ok::<_, String>(serde_json::json!({
+                    "change_set_id": args.change_set_id,
+                    "controller": args.controller,
+                    "state": "cancelled",
+                    "previous_state": "draft",
+                })),
+                ResultFormat::PrettyJson,
+                RESULT_LIMITS,
+                OutputRedaction::Apply,
+            );
+        }
+
+        let mut record = match self.record_for(&args.change_set_id, &args.controller).await {
+            Ok(record) => record,
+            Err(result) => return *result,
+        };
+        if record.owner != principal && record.approver.as_deref() != Some(principal.as_str()) {
+            return tool_error("only the change-set owner or approver may cancel it");
+        }
+
+        // Not the coordinator's `cancel_change_set`: it also cancels `Failed`,
+        // which is where a partial apply lands, and relabelling that
+        // `cancelled` would hide writes already on the controller. It also
+        // returns an already-cancelled set before checking who is asking.
+        let previous_state = record.state;
+        match previous_state {
+            ChangeSetState::Planned | ChangeSetState::Approved | ChangeSetState::Expired => {}
+            ChangeSetState::Cancelled => {
+                return tool_result(
+                    Ok::<_, String>(serde_json::json!({
+                        "change_set_id": record.id,
+                        "controller": record.device,
+                        "state": "cancelled",
+                        "previous_state": "cancelled",
+                    })),
+                    ResultFormat::PrettyJson,
+                    RESULT_LIMITS,
+                    OutputRedaction::Apply,
+                );
+            }
+            other => {
+                return tool_error(format!(
+                    "change set is {}; only a set that has not started applying can be \
+                     cancelled, and a failed apply may have left writes on the controller",
+                    other.as_str()
+                ));
+            }
+        }
+
+        // Conditional on the state still being the one checked above, so an
+        // apply or expiry landing in between refuses the cancel rather than
+        // being overwritten, and `previous_state` is exact.
+        record.state = ChangeSetState::Cancelled;
+        if let Err(error) = self
+            .coordinator
+            .update_change_set_from(previous_state, record.clone())
+            .await
+        {
+            return tool_error(format!(
+                "change set {} on {} ({}): {}",
+                args.change_set_id,
+                args.controller,
+                error.field(),
+                error.message()
+            ));
+        }
+
+        tracing::info!(
+            target: "audit",
+            event = "unifi_change_set_cancelled",
+            change_set_id = %record.id,
+            controller = %record.device,
+            principal = %principal,
+            previous_state = %previous_state.as_str(),
+            "change set cancelled"
+        );
+
+        tool_result(
+            Ok::<_, String>(serde_json::json!({
+                "change_set_id": record.id,
+                "controller": record.device,
+                "state": "cancelled",
+                "previous_state": previous_state.as_str(),
+            })),
             ResultFormat::PrettyJson,
             RESULT_LIMITS,
             OutputRedaction::Apply,

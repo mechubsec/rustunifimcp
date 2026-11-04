@@ -367,6 +367,7 @@ directory, as in section 5.
 
 **A change set stuck in `planned` blocks the next `unifi_create_change_set`** —
 a change set that fails `unifi_validate_change_set` stays `planned`, and that
-token cannot create another until it expires (`expires_at_unix` in
-`unifi_get_change_set`). There is no cancel tool yet (issue #145). Wait for the
-expiry, or use another token.
+token cannot create another until it is finished or cancelled. Cancel it with
+`unifi_cancel_change_set` (0.6.7 and later; the token needs that tool in its
+scope). On earlier versions, wait for `expires_at_unix` in
+`unifi_get_change_set`, or use another token.
