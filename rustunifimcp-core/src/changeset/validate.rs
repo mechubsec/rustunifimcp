@@ -3,7 +3,6 @@
 //! UniFi has no server-side dry-run validation, so referential integrity and
 //! schema constraints must be checked locally before apply.
 
-use crate::ApiSurface;
 use crate::error::UnifiError;
 use crate::model::ResourceKind;
 use serde_json::Value;
@@ -28,7 +27,7 @@ use super::preimage::{Preimage, StagedMutation};
 /// exceptions are deliberate:
 ///
 /// - `station` and `device` allow nothing: they are served from the
-///   Integration API ([`ApiSurface::Supported`]), which has no verified write
+///   Integration API ([`crate::ApiSurface::Supported`]), which has no verified write
 ///   route this server can drive (`client.rs` already refused `kind ==
 ///   "device"` for updates alone; this closes the same gap for creates and
 ///   deletes, and extends it to `station`). Device and client state changes
@@ -68,12 +67,34 @@ fn writable_fields(kind: ResourceKind) -> Option<&'static [&'static str]> {
             "wan_dns2",
             "wan_ipv6_dns1",
             "wan_ipv6_dns2",
+            // #143: what a delete-and-recreate must carry to be faithful.
+            // `attr_no_delete` and `wan_type` are read but not written: the
+            // first is controller-managed, the second reconfigures a WAN.
+            "vlan_enabled",
+            "enabled",
+            "networkgroup",
+            "firewall_zone_id",
+            "domain_name",
+            "igmp_snooping",
+            "internet_access_enabled",
+            "network_isolation_enabled",
+            "dhcpd_leasetime",
+            "dhcpd_dns_enabled",
+            "dhcpd_dns_1",
+            "dhcpd_dns_2",
+            "dhcpd_dns_3",
+            "dhcpd_dns_4",
         ]),
         ResourceKind::Wlan => Some(&["name", "enabled", "security", "wlan_band", "is_guest"]),
         ResourceKind::PortProfile => Some(&["name", "forward", "native_networkconf_id"]),
-        ResourceKind::DhcpReservation => {
-            Some(&["mac", "last_ip", "fixed_ip", "hostname", "use_fixedip"])
-        }
+        ResourceKind::DhcpReservation => Some(&[
+            "mac",
+            "last_ip",
+            "fixed_ip",
+            "hostname",
+            "use_fixedip",
+            "network_id",
+        ]),
         ResourceKind::FirewallGroup => Some(&["name", "group_type", "group_members"]),
         ResourceKind::RadiusProfile => Some(&["name", "external_id"]),
         ResourceKind::FirewallZone => Some(&["name", "default_zone", "network_ids", "external_id"]),
@@ -347,8 +368,22 @@ impl ZoneIndex {
     }
 }
 
-/// The body fields a zone reference can appear under.
-const ZONE_REFERENCE_FIELDS: &[&str] = &["source", "destination"];
+/// Where a body names a zone: a policy's two sides, and a network's own zone.
+const ZONE_REFERENCES: &[(&str, &[&str])] = &[
+    ("source.zone_id", &["source", "zone_id"]),
+    ("destination.zone_id", &["destination", "zone_id"]),
+    ("firewall_zone_id", &["firewall_zone_id"]),
+];
+
+/// Each zone a resource names, with the field that names it.
+fn zones_named_by(resource: &Value) -> impl Iterator<Item = (&'static str, &str)> {
+    ZONE_REFERENCES.iter().filter_map(move |(field, path)| {
+        path.iter()
+            .try_fold(resource, |value, key| value.get(key))
+            .and_then(Value::as_str)
+            .map(|zone_id| (*field, zone_id))
+    })
+}
 
 /// The zone identifiers staged mutations reference, in staging order.
 ///
@@ -365,13 +400,8 @@ pub fn referenced_zone_ids(mutations: &[StagedMutation]) -> Vec<String> {
             StagedMutation::Delete { .. } | StagedMutation::Restore { .. } => continue,
         };
 
-        for field in ZONE_REFERENCE_FIELDS {
-            if let Some(zone_id) = body
-                .get(field)
-                .and_then(|side| side.get("zone_id"))
-                .and_then(Value::as_str)
-                && !referenced.iter().any(|seen| seen == zone_id)
-            {
+        for (_, zone_id) in zones_named_by(body) {
+            if !referenced.iter().any(|seen| seen == zone_id) {
                 referenced.push(zone_id.to_owned());
             }
         }
@@ -394,18 +424,12 @@ fn zones_deleted_by(mutations: &[StagedMutation]) -> Vec<&str> {
         .collect()
 }
 
-/// Whether an update of this kind is a partial write apply merges.
+/// Overlay a staged fragment on a resource the way an update lands.
 ///
-/// Only the Private v2 surface: [`crate::client::UnifiClient::apply_mutation`]
-/// fetches the resource and overlays the staged fields for those kinds, and
-/// sends the body as-is for every other surface. An unrecognised kind fails at
-/// apply, so the verdict for it does not matter.
-fn merges_partially(kind: &str) -> bool {
-    serde_json::from_value::<ResourceKind>(Value::String(kind.to_owned()))
-        .is_ok_and(|resource_kind| resource_kind.surface() == ApiSurface::PrivateV2)
-}
-
-/// Overlay a staged fragment on a resource the way apply does.
+/// Every update is partial: on Private v2,
+/// [`crate::client::UnifiClient::apply_mutation`] overlays the staged fields on
+/// the fetched resource, and a v1 `rest/` PUT is merged by the controller. A
+/// network renamed before its zone is deleted therefore keeps its zone.
 ///
 /// Whole top-level keys are replaced, not deep-merged, and the
 /// controller-managed `_id` and `site_id` are never taken from the fragment.
@@ -428,15 +452,6 @@ fn overlay(base: &mut Value, fragment: &Value) {
             base_object.insert(key.clone(), value.clone());
         }
     }
-}
-
-/// The zone one side of a resource names, if any.
-fn zone_of(resource: &Value, field: &str) -> Option<String> {
-    resource
-        .get(field)
-        .and_then(|side| side.get("zone_id"))
-        .and_then(Value::as_str)
-        .map(str::to_owned)
 }
 
 /// Refuse a change set whose zone deletions and policy writes contradict.
@@ -505,26 +520,22 @@ pub fn check_zone_deletions(
                 refuse_reference_to_deleted(&mutation.preview(), body, &deleted)?;
                 created.push((mutation.preview(), body.clone()));
             }
-            StagedMutation::Update { kind, id, body } => {
+            StagedMutation::Update { id, body, .. } => {
                 let entry = live
                     .entry(id.clone())
                     .or_insert_with(|| (mutation.preview(), Value::Object(serde_json::Map::new())));
-                if merges_partially(kind) {
-                    overlay(&mut entry.1, body);
-                } else {
-                    entry.1 = body.clone();
-                }
+                overlay(&mut entry.1, body);
                 entry.0 = mutation.preview();
                 let (preview, resource) = (entry.0.clone(), entry.1.clone());
                 refuse_reference_to_deleted(&preview, &resource, &deleted)?;
             }
             StagedMutation::Delete { kind, id } if kind == ZONE_KIND => {
                 for (preview, resource) in live.values().chain(created.iter()) {
-                    for field in ZONE_REFERENCE_FIELDS {
-                        if zone_of(resource, field).as_deref() == Some(id.as_str()) {
+                    for (field, zone_id) in zones_named_by(resource) {
+                        if zone_id == id {
                             return Err(UnifiError::ReferenceNotFound(format!(
                                 "staged delete firewall_zone {id} would remove a zone \
-                                 {preview} still names as {field}.zone_id; stage the \
+                                 {preview} still names as {field}; stage the \
                                  change that moves it off the zone before the delete"
                             )));
                         }
@@ -548,13 +559,10 @@ fn refuse_reference_to_deleted(
     resource: &Value,
     deleted: &BTreeSet<&str>,
 ) -> Result<(), UnifiError> {
-    for field in ZONE_REFERENCE_FIELDS {
-        let Some(zone_id) = zone_of(resource, field) else {
-            continue;
-        };
-        if deleted.contains(zone_id.as_str()) {
+    for (field, zone_id) in zones_named_by(resource) {
+        if deleted.contains(zone_id) {
             return Err(UnifiError::ReferenceNotFound(format!(
-                "staged {preview} names {field}.zone_id '{zone_id}', which an earlier \
+                "staged {preview} names {field} '{zone_id}', which an earlier \
                  mutation in this change set deletes"
             )));
         }
@@ -584,27 +592,19 @@ pub fn check_zone_references(
             StagedMutation::Delete { .. } | StagedMutation::Restore { .. } => continue,
         };
 
-        for field in ZONE_REFERENCE_FIELDS {
-            let Some(zone_id) = body
-                .get(field)
-                .and_then(|side| side.get("zone_id"))
-                .and_then(Value::as_str)
-            else {
-                continue;
-            };
-
+        for (field, zone_id) in zones_named_by(body) {
             match zones.resolve(zone_id) {
                 ZoneLookup::Known => {}
                 ZoneLookup::ExternalId(id) => {
                     return Err(UnifiError::ReferenceNotFound(format!(
-                        "staged {} names {field}.zone_id '{zone_id}', which is that zone's \
+                        "staged {} names {field} '{zone_id}', which is that zone's \
                          external_id; the controller addresses it by `_id` '{id}'",
                         mutation.preview()
                     )));
                 }
                 ZoneLookup::Absent => {
                     return Err(UnifiError::ReferenceNotFound(format!(
-                        "staged {} names {field}.zone_id '{zone_id}', which is not one of the \
+                        "staged {} names {field} '{zone_id}', which is not one of the \
                          {} firewall zones on this controller",
                         mutation.preview(),
                         zones.len()
@@ -759,6 +759,57 @@ mod tests {
         let rendered = error.to_string();
         assert!(rendered.contains("deletes"), "{rendered}");
         assert!(rendered.contains("cccccccccccccccccccccccc"), "{rendered}");
+    }
+
+    /// #143: a network names its zone at the top level, and every zone
+    /// check must see it, not only a policy's `source`/`destination`.
+    #[test]
+    fn a_network_zone_reference_is_checked_like_a_policy_side() {
+        let zones = ZoneIndex::from_zone_list(&zone_list()).expect("a well-formed zone list");
+        let network = |zone: &str| {
+            StagedMutation::create(
+                "network",
+                json!({ "name": "moved", "firewall_zone_id": zone }),
+            )
+        };
+        assert_eq!(
+            referenced_zone_ids(&[network("cccccccccccccccccccccccc")]),
+            ["cccccccccccccccccccccccc"]
+        );
+        assert!(check_zone_references(&zones, &[network("cccccccccccccccccccccccc")]).is_ok());
+        let absent = check_zone_references(&zones, &[network("does-not-exist")])
+            .expect_err("an absent zone must be caught");
+        assert!(absent.to_string().contains("firewall_zone_id"), "{absent}");
+
+        let into_deleted = vec![
+            StagedMutation::delete("firewall_zone", "cccccccccccccccccccccccc"),
+            network("cccccccccccccccccccccccc"),
+        ];
+        check_zone_deletions(&preimage_with_live_policy(), &into_deleted)
+            .expect_err("the network's zone is deleted first");
+        let off_deleted = vec![
+            network("cccccccccccccccccccccccc"),
+            StagedMutation::delete("firewall_zone", "cccccccccccccccccccccccc"),
+        ];
+        check_zone_deletions(&preimage_with_live_policy(), &off_deleted)
+            .expect_err("the zone is deleted while the new network still names it");
+
+        // A v1 PUT is merged by the controller, so a rename keeps the zone.
+        let live_network = Preimage::from_fixture(&json!({ "data": [{
+            "_id": "eeeeeeeeeeeeeeeeeeeeeeee",
+            "name": "in dmz",
+            "firewall_zone_id": "cccccccccccccccccccccccc"
+        }]}));
+        let rename_then_delete = vec![
+            StagedMutation::update(
+                "network",
+                "eeeeeeeeeeeeeeeeeeeeeeee",
+                json!({ "name": "renamed" }),
+            ),
+            StagedMutation::delete("firewall_zone", "cccccccccccccccccccccccc"),
+        ];
+        check_zone_deletions(&live_network, &rename_then_delete)
+            .expect_err("the renamed network is still in the zone");
     }
 
     /// Staging order does not rescue it: the policy is checked against the
@@ -1056,6 +1107,35 @@ mod writable_fields_tests {
             json!({ "name": "corp", "vlan": 20, "purpose": "corporate" }),
         );
         assert!(check_writable_fields(&[staged]).is_ok());
+    }
+
+    /// #143: a network read back through the MCP restages as a faithful
+    /// copy, and a reservation can follow it to the new network.
+    #[test]
+    fn a_read_network_and_its_reservation_restage_for_a_move() {
+        let network = StagedMutation::create(
+            "network",
+            json!({
+                "name": "corp", "purpose": "vlan-only", "vlan_enabled": true, "vlan": 20,
+                "enabled": true, "networkgroup": "LAN", "firewall_zone_id": "z1",
+                "domain_name": "corp.invalid", "igmp_snooping": false,
+                "internet_access_enabled": true, "network_isolation_enabled": false,
+                "dhcpd_leasetime": 86400, "dhcpd_dns_enabled": true, "dhcpd_dns_1": "192.0.2.53",
+                "dhcpd_dns_2": "", "dhcpd_dns_3": "", "dhcpd_dns_4": ""
+            }),
+        );
+        let reservation =
+            StagedMutation::update("dhcp_reservation", "u1", json!({ "network_id": "n2" }));
+        assert!(check_writable_fields(&[network, reservation]).is_ok());
+
+        for read_only in ["attr_no_delete", "wan_type"] {
+            let staged =
+                StagedMutation::create("network", json!({ "name": "corp", read_only: "x" }));
+            assert!(
+                check_writable_fields(&[staged]).is_err(),
+                "{read_only} must stay read-only"
+            );
+        }
     }
 
     /// `station` is a read/observability kind served from the Integration

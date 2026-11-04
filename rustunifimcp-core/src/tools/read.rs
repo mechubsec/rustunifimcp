@@ -1293,6 +1293,33 @@ mod tests {
         }
     }
 
+    /// Move-planning fields survive the typed parse and the allowlist (#143).
+    #[test]
+    fn network_and_reservation_expose_move_planning_fields() {
+        use crate::testing::{DEFAULT_FIXTURE_VERSION, fixture};
+
+        for (kind, name, expected) in [
+            (
+                ResourceKind::Network,
+                "networkconf",
+                ["firewall_zone_id", "dhcpd_dns_4", "wan_type"],
+            ),
+            (
+                ResourceKind::DhcpReservation,
+                "user",
+                ["network_id", "use_fixedip", "fixed_ip"],
+            ),
+        ] {
+            let raw = fixture(DEFAULT_FIXTURE_VERSION, name);
+            let parsed = super::parse_resource_list(kind, &raw).expect("parse");
+            let projected = crate::redact::project_resource_list(kind, &parsed);
+            let rendered = projected.to_string();
+            for field in expected {
+                assert!(rendered.contains(field), "{kind:?} lost {field}");
+            }
+        }
+    }
+
     /// DHCP reservations must return strictly fewer rows than the raw /rest/user payload.
     ///
     /// This is the regression test for the architectural gap: parse_dhcp_reservations

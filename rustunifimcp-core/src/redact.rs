@@ -138,6 +138,21 @@ const NETWORK_FIELDS: FieldAllowlist = FieldAllowlist::new(&[
     "wan_ipv6_dns1",
     "wan_ipv6_dns2",
     "wan_type",
+    "firewall_zone_id",
+    "domain_name",
+    "vlan_enabled",
+    "networkgroup",
+    "enabled",
+    "igmp_snooping",
+    "internet_access_enabled",
+    "network_isolation_enabled",
+    "dhcpd_dns_enabled",
+    "dhcpd_dns_1",
+    "dhcpd_dns_2",
+    "dhcpd_dns_3",
+    "dhcpd_dns_4",
+    "dhcpd_leasetime",
+    "attr_no_delete",
 ]);
 
 /// Fields the model may see for a [`ResourceKind::Wlan`].
@@ -173,6 +188,7 @@ const DHCP_RESERVATION_FIELDS: FieldAllowlist = FieldAllowlist::new(&[
     "fixed_ip",
     "hostname",
     "use_fixedip",
+    "network_id",
 ]);
 
 /// Fields the model may see for a [`ResourceKind::RadiusProfile`].

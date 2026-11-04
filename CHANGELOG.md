@@ -28,6 +28,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   went through stage, validate, approve and apply against a real
   controller, and each verified.
 
+### Changed
+
+- `unifi_list_resources` and `unifi_get_resource` for `network` now return
+  the fields needed to plan a network move or copy one before a
+  delete-and-recreate: `firewall_zone_id`, `domain_name`, `vlan_enabled`,
+  `networkgroup`, `enabled`, `igmp_snooping`, `internet_access_enabled`,
+  `network_isolation_enabled`, `dhcpd_dns_enabled`, `dhcpd_dns_1` to
+  `dhcpd_dns_4`, `dhcpd_leasetime`, `attr_no_delete` and `wan_type`.
+  `dhcp_reservation` now returns `network_id` and `use_fixedip`. Credential
+  fields (the `x_*` family, `wireguard_private_key`) are still withheld.
+  All of these except `attr_no_delete` and `wan_type` can also be staged,
+  so a network read back can be recreated as it was and a reservation can be
+  moved to it with `network_id`. Verified live against UniFi Network 10.5.67.
+  The controller refuses moving a network with `network_isolation_enabled`
+  into the guest `Hotspot` zone (`NetworkIsolationAppliedOnNonCorporateNetwork`).
+
 ### Fixed
 
 - Staging a `dhcp_reservation` delete is now refused (#143). A reservation is
