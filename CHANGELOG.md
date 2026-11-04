@@ -38,6 +38,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   element. Not yet checked against a live controller: whether a zone `PUT` or
   `DELETE` by id is accepted.
 
+- An applied update is now verified against every top-level scalar field it
+  staged, not only `name` (#143). An update that changed, say, `fwd_port`
+  and did not land was reported `applied`; it is now `applied_unverified`
+  and names the fields that did not read back. Nested objects and arrays are
+  still not compared.
+
 ## [0.6.6] - 2026-10-27
 
 ### Fixed

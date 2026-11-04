@@ -642,6 +642,65 @@ fn created_id(
         .ok_or_else(|| orphan("carries no `_id`"))
 }
 
+/// The staged top-level scalar fields an update's read-back does not carry.
+///
+/// Names only, never values, so a mismatch report cannot echo a field the
+/// redactor would have hidden. The controller omits a field left at its
+/// default, so an absent field matches a staged `null`, `false` or `""`.
+/// shortcut: arrays and objects are skipped because the controller fills in
+/// and reorders them; compare them leaf by leaf if a nested write goes unverified.
+fn mismatched_scalar_fields<'a>(
+    staged: &'a serde_json::Value,
+    fetched: &serde_json::Value,
+) -> Vec<&'a str> {
+    let Some(staged) = staged.as_object() else {
+        return Vec::new();
+    };
+    staged
+        .iter()
+        .filter(|(_, expected)| !expected.is_array() && !expected.is_object())
+        .filter(|(field, expected)| match fetched.get(field.as_str()) {
+            Some(actual) => actual != *expected,
+            None => !(expected.is_null() || **expected == false || **expected == ""),
+        })
+        .map(|(field, _)| field.as_str())
+        .collect()
+}
+
+/// What the update at `index` should read back as, or `None` when a later
+/// update or delete of the same resource supersedes it. Same-resource
+/// updates fold in order, as validation folds them.
+fn expected_after_update(
+    mutations: &[crate::changeset::StagedMutation],
+    index: usize,
+) -> Option<serde_json::Value> {
+    use crate::changeset::StagedMutation;
+    let StagedMutation::Update { kind, id, .. } = &mutations[index] else {
+        return None;
+    };
+    let same_resource = |mutation: &StagedMutation| {
+        matches!(mutation,
+            StagedMutation::Update { kind: other_kind, id: other_id, .. }
+            | StagedMutation::Delete { kind: other_kind, id: other_id }
+                if other_kind == kind && other_id == id)
+    };
+    if mutations[index + 1..].iter().any(same_resource) {
+        return None;
+    }
+    let mut folded = serde_json::Map::new();
+    for mutation in mutations[..=index]
+        .iter()
+        .filter(|mutation| same_resource(mutation))
+    {
+        if let StagedMutation::Update { body, .. } = mutation
+            && let Some(fields) = body.as_object()
+        {
+            folded.extend(fields.clone());
+        }
+    }
+    Some(serde_json::Value::Object(folded))
+}
+
 /// Implementation of `ControllerOps` for `UnifiClient`.
 ///
 /// This allows `UnifiClient` to be used with `apply_sequentially` and other
@@ -987,18 +1046,19 @@ impl crate::changeset::apply::ControllerOps for UnifiClient {
                     }
                     // If no created ID recorded, skip verification for this create
                 }
-                StagedMutation::Update { kind, id, body } => {
-                    // For updates, verify the resource matches the staged body
+                StagedMutation::Update { kind, id, .. } => {
+                    let Some(expected) = expected_after_update(mutations, index) else {
+                        continue;
+                    };
                     match self.fetch_resource(kind, id).await {
                         Ok(Some(fetched)) => {
-                            // Compare key fields (simplified - full implementation would
-                            // need deep comparison logic)
-                            if let Some(expected_name) = body.get("name")
-                                && fetched.get("name") != Some(expected_name)
-                            {
+                            let mismatched = mismatched_scalar_fields(&expected, &fetched);
+                            if !mismatched.is_empty() {
                                 failed_verifications.push(format!(
-                                    "update {} {}: field mismatch after apply",
-                                    kind, id
+                                    "update {} {}: {} did not read back as staged",
+                                    kind,
+                                    id,
+                                    mismatched.join(", ")
                                 ));
                             }
                         }
@@ -1071,7 +1131,10 @@ pub(crate) fn select_by_id<'a>(
 
 #[cfg(test)]
 mod tests {
-    use super::{UnifiClient, created_id, delete_response_body, select_by_id};
+    use super::{
+        UnifiClient, created_id, delete_response_body, expected_after_update,
+        mismatched_scalar_fields, select_by_id,
+    };
     use crate::ApiSurface;
     use crate::inventory::Controller;
 
@@ -1253,5 +1316,62 @@ mod tests {
         ];
         assert_eq!(select_by_id(&items, "wanted"), Some(&items[1]));
         assert_eq!(select_by_id(&items, "missing"), None);
+    }
+
+    /// #143: an update that changed `fwd_port` but not `name` was reported
+    /// verified, because only `name` was read back.
+    #[test]
+    fn an_update_read_back_compares_every_staged_scalar() {
+        let staged = serde_json::json!({
+            "name": "mcp-test-143-upd",
+            "fwd_port": "40144",
+            "enabled": false,
+            "cleared": null,
+            "use_fixedip": false,
+            "dhcpd_dns_2": "",
+            "source": {"zone_id": "z1"}
+        });
+        let fetched = serde_json::json!({
+            "_id": "id1",
+            "name": "mcp-test-143-upd",
+            "fwd_port": "40143",
+            "enabled": false,
+            "source": {"zone_id": "z1", "matching_target": "ANY"}
+        });
+        assert_eq!(mismatched_scalar_fields(&staged, &fetched), ["fwd_port"]);
+
+        let landed =
+            serde_json::json!({"name": "mcp-test-143-upd", "fwd_port": "40144", "enabled": false});
+        assert!(mismatched_scalar_fields(&staged, &landed).is_empty());
+
+        let dropped = serde_json::json!({"use_fixedip": true, "fixed_ip": "192.0.2.10"});
+        assert_eq!(
+            mismatched_scalar_fields(&dropped, &serde_json::json!({})),
+            ["use_fixedip", "fixed_ip"]
+        );
+    }
+
+    /// A set that writes one field twice must verify the last value, and a
+    /// resource it later deletes is verified by the delete, not the update.
+    #[test]
+    fn repeated_updates_to_one_resource_verify_as_the_last_leaves_it() {
+        use crate::changeset::StagedMutation;
+        let mutations = [
+            StagedMutation::update(
+                "network",
+                "n1",
+                serde_json::json!({"enabled": true, "domain_name": "a.invalid"}),
+            ),
+            StagedMutation::update("network", "n2", serde_json::json!({"enabled": true})),
+            StagedMutation::update("network", "n1", serde_json::json!({"enabled": false})),
+            StagedMutation::update("network", "n2", serde_json::json!({"enabled": false})),
+            StagedMutation::delete("network", "n2"),
+        ];
+        assert_eq!(expected_after_update(&mutations, 0), None);
+        assert_eq!(
+            expected_after_update(&mutations, 2),
+            Some(serde_json::json!({"enabled": false, "domain_name": "a.invalid"}))
+        );
+        assert_eq!(expected_after_update(&mutations, 3), None);
     }
 }
