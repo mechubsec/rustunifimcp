@@ -429,11 +429,7 @@ pub async fn get_resource(
         &client.default_site_for(surface).await?
     };
 
-    let template = single_resource_template(args.kind);
-
-    let raw = client
-        .get(surface, &template, &[("site", site), ("id", &args.id)], &[])
-        .await?;
+    let raw = client.get_single_raw(args.kind, site, &args.id).await?;
 
     let parsed = parse_single_resource(args.kind, &raw)?;
     // `project_resource_list` rather than `project_resource`: `parsed` is

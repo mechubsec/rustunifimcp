@@ -213,6 +213,45 @@ impl UnifiClient {
         self.fetch_version_if_absent().await
     }
 
+    /// GET one resource's raw response body.
+    ///
+    /// Every kind is read at `{list path}/{id}` except a firewall zone: the
+    /// controller answers `firewall/zone/{id}` with 405 Method Not Allowed, so
+    /// a zone is read from the list and narrowed to the elements whose `_id`
+    /// is `id` (an empty array when it is absent, as for any other v2 read).
+    pub(crate) async fn get_single_raw(
+        &self,
+        kind: crate::model::ResourceKind,
+        site: &str,
+        id: &str,
+    ) -> Result<serde_json::Value, UnifiError> {
+        use crate::model::ResourceKind;
+
+        let surface = kind.surface();
+        if kind != ResourceKind::FirewallZone {
+            let template = crate::tools::read::single_resource_template(kind);
+            return self
+                .get(surface, &template, &[("site", site), ("id", id)], &[])
+                .await;
+        }
+
+        let listed = self
+            .get(surface, kind.path_template(), &[("site", site)], &[])
+            .await?;
+        let Some(zones) = listed.as_array() else {
+            return Err(UnifiError::Malformed(
+                "expected Private v2 array for firewall_zone list".to_owned(),
+            ));
+        };
+        Ok(serde_json::Value::Array(
+            zones
+                .iter()
+                .filter(|zone| zone.get("_id").and_then(|v| v.as_str()) == Some(id))
+                .cloned()
+                .collect(),
+        ))
+    }
+
     /// Issue a GET against a path template.
     ///
     /// The template is expanded by `mecmcp-openapi`, which rejects a parameter
@@ -875,7 +914,6 @@ impl crate::changeset::apply::ControllerOps for UnifiClient {
         id: &str,
     ) -> Result<Option<serde_json::Value>, crate::error::UnifiError> {
         use crate::model::{ResourceKind, unwrap_enveloped_data};
-        use crate::tools::read::single_resource_template;
 
         let kind_value = serde_json::Value::String(kind.to_owned());
         let resource_kind: ResourceKind = serde_json::from_value(kind_value)
@@ -883,43 +921,27 @@ impl crate::changeset::apply::ControllerOps for UnifiClient {
 
         let surface = resource_kind.surface();
         let site = self.default_site_for(surface).await?;
-        let template = single_resource_template(resource_kind);
 
-        let response = self
-            .get(surface, &template, &[("site", &site), ("id", id)], &[])
-            .await;
+        let response = self.get_single_raw(resource_kind, &site, id).await;
 
         match response {
-            Ok(raw) => {
-                let items = match surface {
-                    ApiSurface::Supported | ApiSurface::PrivateV1 => unwrap_enveloped_data(&raw)?,
-                    ApiSurface::PrivateV2 => {
-                        // Private v2 can return either a bare array or a single object.
-                        // Preimage::capture_preimage accepts both shapes; this must match.
-                        if let Some(arr) = raw.as_array() {
-                            arr
-                        } else if raw.is_object() {
-                            // Single object - wrap it in a Vec for uniform handling
-                            &vec![raw.clone()]
-                        } else {
-                            return Err(UnifiError::Malformed(
-                                "expected Private v2 array or object".to_owned(),
-                            ));
-                        }
-                    }
-                    ApiSurface::Cloud => {
-                        return Err(UnifiError::Malformed(
-                            "cloud surface not supported".to_owned(),
-                        ));
-                    }
-                };
-
-                if items.is_empty() {
-                    Ok(None)
-                } else {
-                    Ok(Some(items[0].clone()))
+            Ok(raw) => match surface {
+                ApiSurface::Supported | ApiSurface::PrivateV1 => {
+                    Ok(unwrap_enveloped_data(&raw)?.first().cloned())
                 }
-            }
+                // Private v2 can return either a bare array or a single object.
+                // Preimage::capture_preimage accepts both shapes; this must match.
+                ApiSurface::PrivateV2 => match &raw {
+                    serde_json::Value::Array(arr) => Ok(select_by_id(arr, id).cloned()),
+                    serde_json::Value::Object(_) => Ok(Some(raw.clone())),
+                    _ => Err(UnifiError::Malformed(
+                        "expected Private v2 array or object".to_owned(),
+                    )),
+                },
+                ApiSurface::Cloud => Err(UnifiError::Malformed(
+                    "cloud surface not supported".to_owned(),
+                )),
+            },
             // On a private surface, a 404 becomes PrivateEndpointAbsent. On a single-resource
             // fetch, a 404 means the resource is absent, not that the endpoint is missing,
             // so both error shapes map to Ok(None) here. This is only for fetch_resource;
@@ -1034,9 +1056,22 @@ impl crate::changeset::apply::ControllerOps for UnifiClient {
     }
 }
 
+/// The element of a v2 array whose `_id` is `id`.
+///
+/// Not `arr[0]`: a v2 array need not be the one resource asked for, and
+/// taking the first element would pre-image, diff and verify the wrong object.
+pub(crate) fn select_by_id<'a>(
+    items: &'a [serde_json::Value],
+    id: &str,
+) -> Option<&'a serde_json::Value> {
+    items
+        .iter()
+        .find(|item| item.get("_id").and_then(|v| v.as_str()) == Some(id))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{UnifiClient, created_id, delete_response_body};
+    use super::{UnifiClient, created_id, delete_response_body, select_by_id};
     use crate::ApiSurface;
     use crate::inventory::Controller;
 
@@ -1208,5 +1243,15 @@ mod tests {
                 .to_string()
                 .contains("without this change set tracking")
         );
+    }
+
+    #[test]
+    fn select_by_id_ignores_a_leading_element_with_another_id() {
+        let items = vec![
+            serde_json::json!({"_id": "other"}),
+            serde_json::json!({"_id": "wanted", "name": "z"}),
+        ];
+        assert_eq!(select_by_id(&items, "wanted"), Some(&items[1]));
+        assert_eq!(select_by_id(&items, "missing"), None);
     }
 }

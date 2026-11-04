@@ -253,6 +253,11 @@ async fn route_handler(
     if let Some(route) = routes.iter().find(|r| r.path == path) {
         return Json(route.body.clone()).into_response();
     }
+    // The real controller answers a per-id zone GET with 405 (#143); only the
+    // list serves zones, so a client that asks per-id must fail here too.
+    if path.starts_with("/proxy/network/v2/api/site/default/firewall/zone/") {
+        return StatusCode::METHOD_NOT_ALLOWED.into_response();
+    }
     // A get_resource(kind, id) call: `<list path>/<id>`. The list route's
     // body is a reasonable stand-in for what a real controller returns for a
     // single lookup here -- `parse_single_resource` tolerates an unreduced
@@ -537,6 +542,25 @@ async fn preimage_is_raw_for_drift_but_diff_output_is_projected() {
     let controllers_path = write_temp(controllers_body.to_string().as_bytes());
     let registry = ControllerRegistry::load(&controllers_path).expect("load inventory");
     let client = UnifiClient::new(registry.get(CONTROLLER).expect("controller")).expect("client");
+
+    // A zone has no per-id GET on the controller (405), so this only passes
+    // when the pre-image is read from the list.
+    let zone = "000000000000000000000101";
+    let zone_update = vec![StagedMutation::Update {
+        kind: "firewall_zone".to_owned(),
+        id: zone.to_owned(),
+        body: serde_json::json!({"name": "renamed"}),
+    }];
+    let zone_preimage = Preimage::capture_preimage(&client, &zone_update)
+        .await
+        .expect("capture firewall_zone pre-image");
+    assert!(
+        client
+            .preimage_matches(&zone_preimage, &zone_update)
+            .await
+            .expect("zone drift check"),
+        "an unchanged zone must not read as stale"
+    );
 
     let wlan = "000000000000000000000501";
     for mutation in [
