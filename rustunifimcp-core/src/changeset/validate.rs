@@ -142,6 +142,21 @@ pub fn check_writable_fields(mutations: &[StagedMutation]) -> Result<(), UnifiEr
             )));
         };
 
+        // A reservation is the client's `user` record with `use_fixedip` set,
+        // so a DELETE would forget the whole client (name, note, group, local
+        // DNS) and its rollback could not restore it. The body is never
+        // rewritten at apply time, so refuse rather than turn it into an update.
+        if resource_kind == ResourceKind::DhcpReservation
+            && matches!(mutation, StagedMutation::Delete { .. })
+        {
+            return Err(UnifiError::WriteRefused(format!(
+                "staged {} is refused: a dhcp_reservation is the client's `user` record, so \
+                 deleting it would forget the whole client; to remove only the reservation, \
+                 stage an update with {{\"use_fixedip\": false}}",
+                mutation.preview()
+            )));
+        }
+
         let Some(body) = body else { continue };
         let Some(object) = body.as_object() else {
             return Err(UnifiError::WriteRefused(format!(
@@ -989,6 +1004,26 @@ mod writable_fields_tests {
         assert!(check_writable_fields(&[ok]).is_ok());
         let no_ip = StagedMutation::create("dhcp_reservation", json!({ "mac": mac }));
         assert!(check_writable_fields(&[no_ip]).is_ok());
+    }
+
+    /// Deleting a reservation would DELETE the client's whole `user` record;
+    /// the refusal must name the update that removes only the reservation.
+    #[test]
+    fn dhcp_reservation_delete_is_refused() {
+        let staged = StagedMutation::delete("dhcp_reservation", "665f1c2e8a3b4d0001aa0001");
+        let error = check_writable_fields(&[staged]).expect_err("a reservation delete is refused");
+        assert!(error.to_string().contains("use_fixedip"), "{error}");
+    }
+
+    /// The supported way to drop a reservation is an update clearing the flag.
+    #[test]
+    fn dhcp_reservation_update_clearing_use_fixedip_passes() {
+        let staged = StagedMutation::update(
+            "dhcp_reservation",
+            "665f1c2e8a3b4d0001aa0001",
+            json!({ "use_fixedip": false }),
+        );
+        assert!(check_writable_fields(&[staged]).is_ok());
     }
 
     /// A body naming only allowed fields must pass.
