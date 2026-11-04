@@ -29,6 +29,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `{"use_fixedip": false}`. A change set already holding such a delete is
   refused at validate and apply.
 
+- Staging a `firewall_zone` update no longer fails with `failed to capture
+  pre-image for firewall_zone <id>` (#143). The controller answers a per-id
+  `GET firewall/zone/{id}` with 405 Method Not Allowed, so the pre-image, the
+  drift check, the update merge, post-apply verification and
+  `unifi_get_resource` now read the zone list and pick the zone by `_id`. A v2
+  read that returns an array also selects by `_id` instead of taking its first
+  element. Not yet checked against a live controller: whether a zone `PUT` or
+  `DELETE` by id is accepted.
+
 ## [0.6.6] - 2026-10-27
 
 ### Fixed

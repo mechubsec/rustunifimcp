@@ -83,11 +83,10 @@ impl Preimage {
 
                     let surface = resource_kind.surface();
                     let site = client.default_site_for(surface).await?;
-                    let template = crate::tools::read::single_resource_template(resource_kind);
 
                     // Fetch the resource
                     let raw = client
-                        .get(surface, &template, &[("site", &site), ("id", id)], &[])
+                        .get_single_raw(resource_kind, &site, id)
                         .await
                         .map_err(|e| {
                             UnifiError::Malformed(format!(
@@ -112,13 +111,13 @@ impl Preimage {
                         ApiSurface::PrivateV2 => {
                             // Private v2 returns a bare array
                             if let Some(arr) = raw.as_array() {
-                                if arr.is_empty() {
+                                let Some(found) = crate::client::select_by_id(arr, id) else {
                                     return Err(UnifiError::Malformed(format!(
                                         "resource {} {} not found for pre-image capture",
                                         kind, id
                                     )));
-                                }
-                                arr[0].clone()
+                                };
+                                found.clone()
                             } else if raw.is_object() {
                                 // Sometimes returns a single object
                                 raw
