@@ -63,7 +63,7 @@ you skip that:
 ## Verifying entitlement quickly
 
 `unifimcp_status` returns `tool_count` and `write_tool_count` regardless of mode.
-`tool_count: 22, write_tool_count: 11, lab_mode: false` means the writes exist and are
+`tool_count: 23, write_tool_count: 12, lab_mode: false` means the writes exist and are
 gated behind two-person approval, not missing — that distinction is the fastest way
 to tell a config problem from a capability gap. Whether `lab_mode` should be `true`
 depends on the instance: check the table above.
@@ -101,7 +101,7 @@ This is the single most misleading thing about deploying this server, and it cos
 session on 2026-08-30.
 
 `rustunifimcp token add --tools` documents `*` as *"or '*' for read-only tools only"*.
-A token minted with `--tools "*"` is granted the 11 read tools and **none of the 11
+A token minted with `--tools "*"` is granted the 11 read tools and **none of the 12
 writes**, even though `token list` displays its TOOLS column as `*`, which reads as
 fully permissive. The server then advertises 11 tools over `tools/list` and a caller
 sees a read-only server with no error explaining the gap.

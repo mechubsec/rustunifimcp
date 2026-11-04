@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `unifi_cancel_change_set` (#145). A change set that failed validation
+  stayed `planned` and blocked its token from creating another for the
+  whole approval window, with no way out. The owner or approver can now
+  cancel a `planned`, `approved` or `expired` set; the record is kept as
+  `cancelled`, and the cancel is logged as an `audit` event. A set that
+  started applying cannot be cancelled: a failed apply may have left
+  writes on the controller, and `cancelled` would hide them. It is a write
+  tool, so a `--tools "*"` token does not get it: add it by name. This
+  brings `tool_count` to 23 and `write_tool_count` to 12.
+
 ## [0.6.6] - 2026-10-27
 
 ### Fixed

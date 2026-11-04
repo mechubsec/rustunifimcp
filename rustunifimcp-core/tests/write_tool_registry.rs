@@ -25,7 +25,7 @@ fn the_write_tool_registry_holds_exactly_the_mutating_tools() {
 
     // Phase 3 registers the three operational tools (`unifi_run_speed_test`
     // was removed as an unwired stub -- see MEC-505).
-    // Phase 6 adds the seven change-set tools. Extend this list in the task
+    // Phase 6 adds the change-set tools (cancel followed in #145). Extend this list in the task
     // that adds them, never ahead of it -- a name here with no tool behind it
     // is not a guard.
     let mut expected = vec![
@@ -40,6 +40,7 @@ fn the_write_tool_registry_holds_exactly_the_mutating_tools() {
         "unifi_approve_change_set",
         "unifi_apply_change_set",
         "unifi_get_change_set",
+        "unifi_cancel_change_set",
     ];
     expected.sort_unstable();
 

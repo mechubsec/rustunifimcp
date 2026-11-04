@@ -112,13 +112,13 @@ Configuration writes (6 tools, 6 calls) are **gap (accepted)** until Phase 6:
 `unifi_topology_report` · `unifi_traffic_flow_report` ·
 `unifi_client_troubleshoot` · `unifi_device_action` · `unifi_client_action` ·
 `unifi_backup_action` · `unifi_add_controller` · `unifi_list_controllers` · `unifimcp_status` ·
-plus the seven-tool change-set lifecycle (Phase 6).
+plus the eight-tool change-set lifecycle (Phase 6).
 
 ## Before you cut over
 
 1. **Name every tool in the token scope.** `tools: ["*"]` deliberately
    **excludes mutating tools**, so a wildcard token reaches only 11 of the
-   22-tool surface: the 5 read primitives, 2 admin tools (`unifi_list_controllers`,
+   23-tool surface: the 5 read primitives, 2 admin tools (`unifi_list_controllers`,
    `unifimcp_status` — `unifi_add_controller` is a write), and 4 workflows.
    **The three operational tools (`unifi_device_action`, `unifi_client_action`,
    `unifi_backup_action`) and every change-set tool require explicit grants.**
@@ -161,7 +161,7 @@ primitive or workflow.
   a Let's Encrypt certificate for exactly this reason.
 
 - **A wildcard token is read-only.** `tools: ["*"]` grants no mutating tool.
-  Verified live: a wildcard token sees 11 of 22 tools, cannot see
+  Verified live: a wildcard token sees 11 of 23 tools, cannot see
   `unifi_device_action` in `tools/list`, and its invocation does not flash an
   AP's locate LED — while an explicitly-scoped operator token does. The legacy
   server has no equivalent: anything that can reach its port has unrestricted
