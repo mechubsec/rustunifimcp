@@ -1608,6 +1608,7 @@ impl UnifiServer {
             task_id: None,
             apply_without_handle: false,
             owner_subject: Self::owner_subject_of(caller.as_ref()),
+            owner_verified: false,
         };
 
         let staged = match Self::with_plan(base, &mutations, &preimage, &description) {
@@ -2576,10 +2577,14 @@ mod tests {
             actor_type: mecmcp_auth::ActorType::Human,
             oidc_subject: None,
             verified_approver: None,
+            verified_proposer: None,
             client_name: None,
             model_id: None,
             session_id: None,
             request_id: uuid::Uuid::new_v4(),
+            oauth: None,
+            token_created_at: None,
+            token_expires_at: None,
         }
     }
 
@@ -2850,10 +2855,14 @@ mod tests {
             actor_type: mecmcp_auth::ActorType::Agent,
             oidc_subject: None,
             verified_approver: None,
+            verified_proposer: None,
             client_name: None,
             model_id: None,
             session_id: None,
             request_id: uuid::Uuid::new_v4(),
+            oauth: None,
+            token_created_at: None,
+            token_expires_at: None,
         };
         assert_eq!(
             UnifiServer::approver_actor_type(Some(&caller)),
@@ -2876,10 +2885,14 @@ mod tests {
             actor_type: mecmcp_auth::ActorType::Human,
             oidc_subject: None,
             verified_approver: None,
+            verified_proposer: None,
             client_name: None,
             model_id: None,
             session_id: None,
             request_id: uuid::Uuid::new_v4(),
+            oauth: None,
+            token_created_at: None,
+            token_expires_at: None,
         };
         assert_eq!(
             UnifiServer::approver_actor_type(Some(&caller)),
@@ -3003,6 +3016,7 @@ mod tests {
             task_id: None,
             apply_without_handle: false,
             owner_subject: None,
+            owner_verified: false,
         };
         let staged = vec![StagedMutation::create(
             "firewall_policy",
@@ -3510,6 +3524,7 @@ mod tests {
             task_id: None,
             apply_without_handle: false,
             owner_subject: None,
+            owner_verified: false,
         };
         let staged = vec![StagedMutation::update(
             "device",
