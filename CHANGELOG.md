@@ -19,6 +19,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tool, so a `--tools "*"` token does not get it: add it by name. This
   brings `tool_count` to 23 and `write_tool_count` to 12.
 
+### Fixed
+
+- Staging a `dhcp_reservation` delete is now refused (#143). A reservation is
+  not its own controller record but the client's `user` record with
+  `use_fixedip: true`, so the delete sent `DELETE rest/user/{id}` and forgot the
+  whole client (name, note, group, local DNS), and its rollback could not
+  restore it. To remove only the reservation, stage an update with
+  `{"use_fixedip": false}`. A change set already holding such a delete is
+  refused at validate and apply.
+
 ## [0.6.6] - 2026-10-27
 
 ### Fixed
