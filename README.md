@@ -115,9 +115,10 @@ documented in `rustunifimcp-core::redact` before it reaches the model — see
 | `unifi_list_sites` | |
 
 `firewall_rule`, `port_forward`, and `static_route` (MEC-509) are the legacy
-(non-zone-based) ruleset, port forwarding rules, and static routes —
-read-only for now; no write route exists for them through
-`unifi_stage_change`. `subject=event` reaches the controller's event log.
+(non-zone-based) ruleset, port forwarding rules, and static routes.
+`port_forward` and `static_route` can be created, updated, and deleted
+through `unifi_stage_change`; `firewall_rule` is read-only (superseded by
+`firewall_policy`). `subject=event` reaches the controller's event log.
 
 `unifi_backup_action` (MEC-516) wires `list` and `trigger`: `list` returns
 the controller's retained backups, capped at 100 entries with a `truncated`

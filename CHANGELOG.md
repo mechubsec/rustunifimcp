@@ -19,6 +19,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tool, so a `--tools "*"` token does not get it: add it by name. This
   brings `tool_count` to 23 and `write_tool_count` to 12.
 
+- `port_forward` and `static_route` can now be staged for create, update, and
+  delete through `unifi_stage_change` (#143). They were read-only kinds
+  (MEC-509). Apply, rollback, and verify already addressed
+  `rest/portforward` and `rest/routing` generically, so only the
+  writable-field allowlist changed. `firewall_rule` stays read-only.
+  Verified live on 2026-11-03: a create, update and delete of each kind
+  went through stage, validate, approve and apply against a real
+  controller, and each verified.
+
 ### Fixed
 
 - Staging a `dhcp_reservation` delete is now refused (#143). A reservation is

@@ -99,9 +99,31 @@ fn writable_fields(kind: ResourceKind) -> Option<&'static [&'static str]> {
             "match_opposite_protocol",
         ]),
         ResourceKind::TrafficRoute => Some(&["name"]),
-        // MEC-509 added these as read-only kinds; no write route exists for
-        // them yet, same posture as `Station`/`Device` above.
-        ResourceKind::FirewallRule | ResourceKind::PortForward | ResourceKind::StaticRoute => None,
+        ResourceKind::PortForward => Some(&[
+            "name",
+            "enabled",
+            "pfwd_interface",
+            "src",
+            "dst_port",
+            "fwd",
+            "fwd_port",
+            "proto",
+            "destination_ip",
+            "log",
+        ]),
+        ResourceKind::StaticRoute => Some(&[
+            "name",
+            "type",
+            "enabled",
+            "static-route_type",
+            "static-route_network",
+            "static-route_nexthop",
+            "static-route_distance",
+            "static-route_interface",
+        ]),
+        // Legacy firewall rules are superseded by `firewall_policy`; they stay
+        // read-only (MEC-509), same posture as `Station`/`Device` above.
+        ResourceKind::FirewallRule => None,
     }
 }
 
@@ -1065,6 +1087,36 @@ mod writable_fields_tests {
     fn a_delete_of_a_read_only_kind_is_refused() {
         let staged = StagedMutation::delete("device", "abc123");
         assert!(check_writable_fields(&[staged]).is_err());
+    }
+
+    /// Port forwards and static routes are writable (#143); the legacy
+    /// `firewall_rule` kind is not.
+    #[test]
+    fn port_forward_and_static_route_writes_are_gated_by_field() {
+        let forward = StagedMutation::create(
+            "port_forward",
+            json!({ "name": "ssh", "enabled": true, "pfwd_interface": "wan", "src": "any",
+                    "dst_port": "2222", "fwd": "192.0.2.10", "fwd_port": "22",
+                    "proto": "tcp", "destination_ip": "203.0.113.10", "log": false }),
+        );
+        assert!(check_writable_fields(&[forward]).is_ok());
+        let route = StagedMutation::update(
+            "static_route",
+            "abc123",
+            json!({ "name": "lab", "type": "static-route", "enabled": true,
+                    "static-route_type": "nexthop-route",
+                    "static-route_network": "198.51.100.0/24",
+                    "static-route_nexthop": "192.0.2.1", "static-route_distance": 1,
+                    "static-route_interface": "wan" }),
+        );
+        assert!(check_writable_fields(&[route]).is_ok());
+        for kind in ["port_forward", "static_route"] {
+            let bad = StagedMutation::create(kind, json!({ "name": "x", "_id": "y" }));
+            let error = check_writable_fields(&[bad]).expect_err("unknown field must be refused");
+            assert!(error.to_string().contains("_id"), "{error}");
+        }
+        let rule = StagedMutation::create("firewall_rule", json!({ "name": "x" }));
+        assert!(check_writable_fields(&[rule]).is_err());
     }
 
     /// A restore addresses the whole controller, not a kind, so it is not
