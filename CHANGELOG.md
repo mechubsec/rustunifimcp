@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Updating a `firewall_zone` failed: the controller refused the `PUT` with
+  `Unrecognized field "attr_no_edit"` (#143). The update body was built from the
+  zone list, which carries fields the zone endpoint does not take. A zone update
+  now sends `_id`, `name` and `network_ids` only, the staged fields over them,
+  and so does rolling a zone update back. Rolling a zone delete back still
+  fails: no zone create restores the original `_id`, so it is reported as a
+  failed rollback.
+  Staging `default_zone` or `external_id` on a zone is now refused at staging:
+  the controller rejects both on create and update (UniFi Network 11.0.97).
+
 ## [0.6.8] - 2026-11-04
 
 ### Changed
