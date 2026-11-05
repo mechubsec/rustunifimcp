@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.8] - 2026-11-04
+
 ### Changed
 
 - mecmcp 0.27.0 → 0.32.0. Nothing this server does changes: the options
