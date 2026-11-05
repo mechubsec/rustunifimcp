@@ -23,9 +23,9 @@ use rmcp::{
 use rustunifimcp_core::{
     changeset::{
         Preimage, StagedMutation, State, UnifiTransaction, ZoneIndex, actions_for,
-        apply_sequentially, check_writable_fields, check_zone_deletions, check_zone_references,
-        diff_against_preimage, fingerprint_of, mutations_of, preimage_of, referenced_zone_ids,
-        validate_locally,
+        apply_sequentially, check_network_references, check_writable_fields, check_zone_deletions,
+        check_zone_references, diff_against_preimage, fingerprint_of, mutations_of, preimage_of,
+        referenced_network_ids, referenced_zone_ids, validate_locally,
     },
     client::UnifiClient,
     error::UnifiError,
@@ -1826,6 +1826,41 @@ impl UnifiServer {
             };
 
             if let Err(e) = check_zone_references(&zones, &mutations) {
+                return tool_error(format!("reference check failed: {e}"));
+            }
+        }
+
+        // A reservation moving to another network names it by `network_id`.
+        // Same rule as zones: fetch the live list only when a staged body
+        // names one, and refuse an id the controller does not have.
+        if !referenced_network_ids(&mutations).is_empty() {
+            let client = match self.client_for(&args.controller) {
+                Ok(client) => client,
+                Err(result) => return *result,
+            };
+
+            // shortcut: reads the first page (200) only, like the zone check above;
+            // fetch every page if a site ever holds more networks than that.
+            let network_args = read::ListResourcesArgs {
+                controller: args.controller.clone(),
+                kind: ResourceKind::Network,
+                site: None,
+                limit: None,
+                offset: None,
+            };
+
+            let raw = match read::list_resources(&client, &network_args).await {
+                Ok(raw) => raw,
+                Err(e) => {
+                    return tool_error(format!(
+                        "could not read the network list from controller '{}', so network_id \
+                         references cannot be checked: {e}",
+                        args.controller
+                    ));
+                }
+            };
+
+            if let Err(e) = check_network_references(&raw, &mutations) {
                 return tool_error(format!("reference check failed: {e}"));
             }
         }
