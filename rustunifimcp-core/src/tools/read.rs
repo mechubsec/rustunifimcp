@@ -1256,7 +1256,9 @@ mod tests {
     #[test]
     fn every_resource_kind_has_a_parser_wired() {
         use crate::model::ResourceKind;
-        use crate::testing::{SYNTHETIC_FIXTURE_VERSION, fixture, fixture_versions, is_absent};
+        use crate::testing::{
+            SYNTHETIC_FIXTURE_VERSION, fixture, fixture_versions, has_fixture, is_absent,
+        };
 
         for version in fixture_versions() {
             for kind in ResourceKind::ALL {
@@ -1282,6 +1284,16 @@ mod tests {
                         version, SYNTHETIC_FIXTURE_VERSION,
                         "the synthetic set records no endpoint as absent"
                     );
+                    continue;
+                }
+
+                // An older recording predates newer kinds: neither file nor marker.
+                if !has_fixture(&version, fixture_name) {
+                    assert_ne!(
+                        version, SYNTHETIC_FIXTURE_VERSION,
+                        "the synthetic set must carry every kind"
+                    );
+                    eprintln!("SKIPPED: {kind:?} was not recorded for {version}");
                     continue;
                 }
 
