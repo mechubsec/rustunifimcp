@@ -667,6 +667,47 @@ fn mismatched_scalar_fields<'a>(
         .collect()
 }
 
+/// What a write of this kind may send back of a resource as the controller
+/// lists it. A zone keeps only `_id` and its writable fields (`name`,
+/// `network_ids`): the zone list also carries `attr_no_edit`,
+/// `cloud_template`, `default_zone`, `external_id` and `zone_key`, and the zone
+/// endpoint refuses each as an unrecognized field (#143, checked live against
+/// UniFi Network 11.0.97). Every other kind is returned unchanged.
+fn writable_projection(
+    kind: crate::model::ResourceKind,
+    mut resource: serde_json::Value,
+) -> serde_json::Value {
+    if kind == crate::model::ResourceKind::FirewallZone
+        && let Some(writable) = crate::changeset::validate::writable_fields(kind)
+        && let Some(fields) = resource.as_object_mut()
+    {
+        fields.retain(|field, _| field == "_id" || writable.contains(&field.as_str()));
+    }
+    resource
+}
+
+/// The body a Private v2 update PUTs: the writable part of the current
+/// resource with the staged fields laid over it, because that surface rejects
+/// a body missing required fields. `_id` and `site_id` are never taken from
+/// the staged body.
+fn merged_update_body(
+    kind: crate::model::ResourceKind,
+    current: serde_json::Value,
+    staged: &serde_json::Value,
+) -> serde_json::Value {
+    let mut body = writable_projection(kind, current);
+    if let Some(body_fields) = body.as_object_mut()
+        && let Some(staged_fields) = staged.as_object()
+    {
+        for (field, value) in staged_fields {
+            if field != "_id" && field != "site_id" {
+                body_fields.insert(field.clone(), value.clone());
+            }
+        }
+    }
+    body
+}
+
 /// What the update at `index` should read back as, or `None` when a later
 /// update or delete of the same resource supersedes it. Same-resource
 /// updates fold in order, as validation folds them.
@@ -777,23 +818,7 @@ impl crate::changeset::apply::ControllerOps for UnifiClient {
                 let merged_body = if surface == ApiSurface::PrivateV2 {
                     // Fetch current resource
                     match self.fetch_resource(kind, id).await? {
-                        Some(mut current) => {
-                            // Merge staged fields over current, preserving controller-managed fields
-                            if let Some(current_obj) = current.as_object_mut()
-                                && let Some(staged_obj) = body.as_object()
-                            {
-                                for (key, value) in staged_obj {
-                                    // Drop controller-managed fields from staged body
-                                    // These fields are managed by the controller and should not be overwritten:
-                                    // - _id: resource identifier
-                                    // - site_id: site association
-                                    if key != "_id" && key != "site_id" {
-                                        current_obj.insert(key.clone(), value.clone());
-                                    }
-                                }
-                            }
-                            current
-                        }
+                        Some(current) => merged_update_body(resource_kind, current, body),
                         None => {
                             return Err(UnifiError::Malformed(format!(
                                 "update {} {}: resource not found before apply",
@@ -895,7 +920,7 @@ impl crate::changeset::apply::ControllerOps for UnifiClient {
                     &template,
                     &[("site", &site), ("id", id)],
                     &[],
-                    prior,
+                    &writable_projection(resource_kind, prior.clone()),
                 )
                 .await?;
 
@@ -1132,8 +1157,8 @@ pub(crate) fn select_by_id<'a>(
 #[cfg(test)]
 mod tests {
     use super::{
-        UnifiClient, created_id, delete_response_body, expected_after_update,
-        mismatched_scalar_fields, select_by_id,
+        UnifiClient, created_id, delete_response_body, expected_after_update, merged_update_body,
+        mismatched_scalar_fields, select_by_id, writable_projection,
     };
     use crate::ApiSurface;
     use crate::inventory::Controller;
@@ -1373,5 +1398,57 @@ mod tests {
             Some(serde_json::json!({"enabled": false, "domain_name": "a.invalid"}))
         );
         assert_eq!(expected_after_update(&mutations, 3), None);
+    }
+
+    #[test]
+    fn a_zone_update_sends_only_its_id_and_writable_fields() {
+        use crate::model::ResourceKind;
+        let listed = serde_json::json!({
+            "_id": "z1", "name": "old", "default_zone": false, "network_ids": ["n1"],
+            "external_id": "e1", "attr_no_edit": false, "cloud_template": "t", "zone_key": "k",
+        });
+        let body = merged_update_body(
+            ResourceKind::FirewallZone,
+            listed,
+            &serde_json::json!({ "name": "new", "_id": "other" }),
+        );
+        assert_eq!(
+            body,
+            serde_json::json!({ "_id": "z1", "name": "new", "network_ids": ["n1"] })
+        );
+    }
+
+    #[test]
+    fn a_policy_update_keeps_every_field_the_controller_returned() {
+        use crate::model::ResourceKind;
+        let current =
+            serde_json::json!({ "_id": "p1", "site_id": "s1", "name": "old", "origin_type": "x" });
+        let body = merged_update_body(
+            ResourceKind::FirewallPolicy,
+            current,
+            &serde_json::json!({ "name": "new", "site_id": "s2" }),
+        );
+        assert_eq!(
+            body,
+            serde_json::json!({ "_id": "p1", "site_id": "s1", "name": "new", "origin_type": "x" })
+        );
+    }
+
+    #[test]
+    fn a_zone_rollback_restores_only_what_the_zone_endpoint_takes() {
+        use crate::model::ResourceKind;
+        let preimage = serde_json::json!({
+            "_id": "z1", "name": "before", "default_zone": false, "network_ids": ["n1"],
+            "external_id": "e1", "attr_no_edit": false, "cloud_template": "t", "zone_key": "k",
+        });
+        assert_eq!(
+            writable_projection(ResourceKind::FirewallZone, preimage),
+            serde_json::json!({ "_id": "z1", "name": "before", "network_ids": ["n1"] })
+        );
+        let network = serde_json::json!({ "_id": "n1", "name": "lan", "attr_no_delete": true });
+        assert_eq!(
+            writable_projection(ResourceKind::Network, network.clone()),
+            network
+        );
     }
 }

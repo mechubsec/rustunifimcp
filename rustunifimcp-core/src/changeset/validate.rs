@@ -52,7 +52,7 @@ use super::preimage::{Preimage, StagedMutation};
 ///   predefined -- an edit no caller is expected to make -- it would refuse
 ///   the read-edit-restage loop for every `firewall_policy` update, since the
 ///   body would always carry a field the allowlist no longer names.
-fn writable_fields(kind: ResourceKind) -> Option<&'static [&'static str]> {
+pub(crate) fn writable_fields(kind: ResourceKind) -> Option<&'static [&'static str]> {
     match kind {
         ResourceKind::Station | ResourceKind::Device => None,
         ResourceKind::Network => Some(&[
@@ -97,7 +97,10 @@ fn writable_fields(kind: ResourceKind) -> Option<&'static [&'static str]> {
         ]),
         ResourceKind::FirewallGroup => Some(&["name", "group_type", "group_members"]),
         ResourceKind::RadiusProfile => Some(&["name", "external_id"]),
-        ResourceKind::FirewallZone => Some(&["name", "default_zone", "network_ids", "external_id"]),
+        // #143: the zone endpoint takes only these (plus `_id` on a PUT), on create
+        // and update alike; `default_zone` and `external_id` are refused as
+        // unrecognized fields. Checked live against UniFi Network 11.0.97.
+        ResourceKind::FirewallZone => Some(&["name", "network_ids"]),
         ResourceKind::FirewallPolicy => Some(&[
             "name",
             "action",
@@ -1038,6 +1041,23 @@ mod writable_fields_tests {
 
     /// A field this server does not recognise for the kind must be refused,
     /// not forwarded to the controller.
+    /// The zone endpoint refuses `default_zone` and `external_id`, so staging
+    /// either is refused here rather than failing at apply with a 400.
+    #[test]
+    fn a_zone_write_is_refused_a_field_the_zone_endpoint_rejects() {
+        for field in ["default_zone", "external_id"] {
+            let staged = StagedMutation::update("firewall_zone", "z1", json!({ field: true }));
+            let error = check_writable_fields(&[staged]).expect_err("a read-only zone field");
+            assert!(error.to_string().contains(field), "{error}");
+        }
+        let renamed = StagedMutation::update(
+            "firewall_zone",
+            "z1",
+            json!({ "name": "renamed", "network_ids": [] }),
+        );
+        assert!(check_writable_fields(&[renamed]).is_ok());
+    }
+
     #[test]
     fn a_disallowed_field_is_refused() {
         let staged = StagedMutation::create(
