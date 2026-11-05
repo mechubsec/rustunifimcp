@@ -227,6 +227,8 @@ fn token_command_to_action(command: TokenCommand) -> Result<(TokenAction, Option
                     actor_type,
                     oidc_issuer,
                     oidc_subject,
+                    // This server wires no device-attribute source, so a selector token would match no controller.
+                    device_selector: Vec::new(),
                     server_pid,
                 },
                 grant,

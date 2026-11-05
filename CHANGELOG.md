@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- mecmcp 0.27.0 → 0.32.0. Nothing this server does changes: the options
+  mecmcp added since (OAuth resource mode, device selectors, IdP-verified
+  proposers, `whoami`, compact tool mode) are not wired here, and
+  `token add` mints no device selectors. Each per-call audit record now
+  also carries `identity_mechanism` and empty `oauth_issuer`,
+  `oauth_subject` and `oauth_client_id` fields, so a parser that matches
+  audit lines exactly must allow them. `unifimcp_status` reports
+  `mecmcp_version: 0.32.0`. The change-set state and token files keep
+  their shape, so rolling back to 0.6.7 stays possible. A token named
+  `oauth:…` is now reserved, and a token file holding one fails to load
+  as a whole; rename it before upgrading.
+
 ## [0.6.7] - 2026-11-04
 
 ### Added
