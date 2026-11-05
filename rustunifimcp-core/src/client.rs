@@ -642,29 +642,73 @@ fn created_id(
         .ok_or_else(|| orphan("carries no `_id`"))
 }
 
-/// The staged top-level scalar fields an update's read-back does not carry.
+/// The staged fields, as dotted paths such as `source.zone_id`, that an
+/// update's read-back does not carry.
 ///
 /// Names only, never values, so a mismatch report cannot echo a field the
-/// redactor would have hidden. The controller omits a field left at its
-/// default, so an absent field matches a staged `null`, `false` or `""`.
-/// shortcut: arrays and objects are skipped because the controller fills in
-/// and reorders them; compare them leaf by leaf if a nested write goes unverified.
-fn mismatched_scalar_fields<'a>(
-    staged: &'a serde_json::Value,
-    fetched: &serde_json::Value,
-) -> Vec<&'a str> {
+/// redactor would have hidden. Objects are compared key by key over the staged
+/// keys only; keys the controller adds are ignored. The controller omits a
+/// field left at its default, so at any depth an absent field matches a staged
+/// `null`, `false` or `""`. Scalar arrays compare as multisets, since the
+/// controller reorders them; an absent field matches a staged `[]`.
+/// shortcut: arrays holding objects are skipped because the controller fills in
+/// and reorders their elements; match them by a key if one goes unverified.
+fn mismatched_fields(staged: &serde_json::Value, fetched: &serde_json::Value) -> Vec<String> {
+    let mut mismatched = Vec::new();
+    collect_mismatched_fields(staged, Some(fetched), "", &mut mismatched);
+    mismatched
+}
+
+/// Appends the path of every staged leaf under `staged` that `fetched` lacks.
+fn collect_mismatched_fields(
+    staged: &serde_json::Value,
+    fetched: Option<&serde_json::Value>,
+    prefix: &str,
+    mismatched: &mut Vec<String>,
+) {
+    use serde_json::Value;
     let Some(staged) = staged.as_object() else {
-        return Vec::new();
+        return;
     };
-    staged
-        .iter()
-        .filter(|(_, expected)| !expected.is_array() && !expected.is_object())
-        .filter(|(field, expected)| match fetched.get(field.as_str()) {
-            Some(actual) => actual != *expected,
-            None => !(expected.is_null() || **expected == false || **expected == ""),
-        })
-        .map(|(field, _)| field.as_str())
-        .collect()
+    for (field, expected) in staged {
+        let actual = fetched.and_then(|value| value.get(field.as_str()));
+        let path = if prefix.is_empty() {
+            field.clone()
+        } else {
+            format!("{prefix}.{field}")
+        };
+        let matches = match expected {
+            Value::Object(_) => {
+                collect_mismatched_fields(expected, actual, &path, mismatched);
+                continue;
+            }
+            Value::Array(items) if items.iter().any(|item| item.is_object() || item.is_array()) => {
+                continue;
+            }
+            Value::Array(items) => match actual {
+                None => items.is_empty(),
+                Some(Value::Array(found)) => same_scalars_any_order(items, found),
+                Some(_) => false,
+            },
+            _ => match actual {
+                Some(actual) => actual == expected,
+                None => expected.is_null() || *expected == false || *expected == "",
+            },
+        };
+        if !matches {
+            mismatched.push(path);
+        }
+    }
+}
+
+/// Whether two scalar lists hold the same values the same number of times.
+fn same_scalars_any_order(expected: &[serde_json::Value], found: &[serde_json::Value]) -> bool {
+    let sorted = |values: &[serde_json::Value]| {
+        let mut rendered: Vec<String> = values.iter().map(|value| value.to_string()).collect();
+        rendered.sort();
+        rendered
+    };
+    sorted(expected) == sorted(found)
 }
 
 /// What a write of this kind may send back of a resource as the controller
@@ -1077,7 +1121,7 @@ impl crate::changeset::apply::ControllerOps for UnifiClient {
                     };
                     match self.fetch_resource(kind, id).await {
                         Ok(Some(fetched)) => {
-                            let mismatched = mismatched_scalar_fields(&expected, &fetched);
+                            let mismatched = mismatched_fields(&expected, &fetched);
                             if !mismatched.is_empty() {
                                 failed_verifications.push(format!(
                                     "update {} {}: {} did not read back as staged",
@@ -1158,7 +1202,7 @@ pub(crate) fn select_by_id<'a>(
 mod tests {
     use super::{
         UnifiClient, created_id, delete_response_body, expected_after_update, merged_update_body,
-        mismatched_scalar_fields, select_by_id, writable_projection,
+        mismatched_fields, select_by_id, writable_projection,
     };
     use crate::ApiSurface;
     use crate::inventory::Controller;
@@ -1363,17 +1407,81 @@ mod tests {
             "enabled": false,
             "source": {"zone_id": "z1", "matching_target": "ANY"}
         });
-        assert_eq!(mismatched_scalar_fields(&staged, &fetched), ["fwd_port"]);
+        assert_eq!(mismatched_fields(&staged, &fetched), ["fwd_port"]);
 
-        let landed =
-            serde_json::json!({"name": "mcp-test-143-upd", "fwd_port": "40144", "enabled": false});
-        assert!(mismatched_scalar_fields(&staged, &landed).is_empty());
+        let landed = serde_json::json!({
+            "name": "mcp-test-143-upd",
+            "fwd_port": "40144",
+            "enabled": false,
+            "source": {"zone_id": "z1"}
+        });
+        assert!(mismatched_fields(&staged, &landed).is_empty());
 
         let dropped = serde_json::json!({"use_fixedip": true, "fixed_ip": "192.0.2.10"});
         assert_eq!(
-            mismatched_scalar_fields(&dropped, &serde_json::json!({})),
+            mismatched_fields(&dropped, &serde_json::json!({})),
             ["use_fixedip", "fixed_ip"]
         );
+    }
+
+    /// A nested leaf the controller rewrote is named by its dotted path, and
+    /// keys the controller added inside the object are not reported.
+    #[test]
+    fn nested_leaf_mismatch_is_reported_by_path() {
+        let staged = serde_json::json!({
+            "source": {"zone_id": "zone-a", "matching_target": "IP", "ips": ["10.0.0.0/24"]}
+        });
+        let rewritten = serde_json::json!({
+            "source": {"zone_id": "zone-b", "matching_target": "IP", "ips": ["10.0.0.0/24"],
+                       "port_matching_type": "ANY"}
+        });
+        assert_eq!(mismatched_fields(&staged, &rewritten), ["source.zone_id"]);
+
+        let extra_keys = serde_json::json!({
+            "source": {"zone_id": "zone-a", "matching_target": "IP", "ips": ["10.0.0.0/24"],
+                       "port_matching_type": "ANY"}
+        });
+        assert!(mismatched_fields(&staged, &extra_keys).is_empty());
+
+        let dropped = serde_json::json!({"name": "p"});
+        assert_eq!(
+            mismatched_fields(&staged, &dropped),
+            ["source.zone_id", "source.matching_target", "source.ips"]
+        );
+    }
+
+    /// A nested field left at its default is omitted by the controller, so it
+    /// still matches at depth.
+    #[test]
+    fn missing_nested_leaf_with_a_default_staged_matches() {
+        let staged = serde_json::json!({"source": {"match_opposite": false, "zone_id": "zone-a"}});
+        let fetched = serde_json::json!({"source": {"zone_id": "zone-a"}});
+        assert!(mismatched_fields(&staged, &fetched).is_empty());
+    }
+
+    /// Scalar arrays compare as multisets: order is free, membership and counts are not.
+    #[test]
+    fn scalar_arrays_compare_without_regard_to_order() {
+        let staged = serde_json::json!({"ips": ["a", "b"], "none": []});
+        let reordered = serde_json::json!({"ips": ["b", "a"]});
+        assert!(mismatched_fields(&staged, &reordered).is_empty());
+
+        for differing in [
+            serde_json::json!({"ips": ["a"]}),
+            serde_json::json!({"ips": ["a", "a", "b"]}),
+            serde_json::json!({"ips": ["a", "c"]}),
+            serde_json::json!({}),
+        ] {
+            assert_eq!(mismatched_fields(&staged, &differing), ["ips"]);
+        }
+    }
+
+    /// Arrays holding objects are not verified (the documented shortcut).
+    #[test]
+    fn arrays_of_objects_are_skipped() {
+        let staged = serde_json::json!({"rules": [{"id": "r1"}], "name": "p"});
+        let fetched = serde_json::json!({"rules": [], "name": "p"});
+        assert!(mismatched_fields(&staged, &fetched).is_empty());
     }
 
     /// A set that writes one field twice must verify the last value, and a
