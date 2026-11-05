@@ -129,7 +129,7 @@ pub struct DeviceActionArgs {
     /// `adopt`.
     ///
     /// A pending device's MAC and model are self-reported in its inform to
-    /// the controller, so [`adopt_command`] checking `stat/device` alone is
+    /// the controller, so `adopt_command` checking `stat/device` alone is
     /// not an identity check -- any host that can reach the inform endpoint
     /// can present as a pending device. Naming the expected model here, for a
     /// human to have confirmed out of band, is what [`device_action`] checks
@@ -774,8 +774,8 @@ fn port_action_command(
 /// returns `rc: "ok"`, so command strings are closed and validated here.
 ///
 /// `adopt`, `upgrade`, and `port_action` additionally confirm the device's
-/// live `stat/device` state via [`find_private_device`] before dispatching --
-/// see [`adopt_command`], [`upgrade_command`], and [`port_action_command`] for
+/// live `stat/device` state via `find_private_device` before dispatching --
+/// see `adopt_command`, `upgrade_command`, and `port_action_command` for
 /// what each one checks -- per the module documentation.
 ///
 /// # Errors
@@ -908,7 +908,7 @@ pub async fn client_action(
 /// Execute a backup action on the controller.
 ///
 /// Wired actions: `list` (`cmd/backup` `list-backups`, capped at
-/// [`MAX_BACKUP_ITEMS`] and reporting a truncation marker like every other
+/// `MAX_BACKUP_ITEMS` and reporting a truncation marker like every other
 /// list-shaped tool) and `trigger` (`cmd/backup` `backup`, requesting `days:
 /// 0` so the controller builds a config-only backup rather than the largest,
 /// slowest full-history one). `trigger` is not idempotent: it starts an

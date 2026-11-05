@@ -445,7 +445,7 @@ pub async fn get_resource(
 /// Statistics are served from the Private v1 API surface, which returns its
 /// whole collection regardless of `offset`/`limit`, so the page named in
 /// `args` is applied locally, after the fetch -- see
-/// [`crate::tools::pagination`].
+/// `crate::tools::pagination`.
 ///
 /// # Errors
 ///

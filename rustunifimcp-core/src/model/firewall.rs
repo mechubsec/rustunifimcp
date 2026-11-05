@@ -97,7 +97,7 @@ pub struct FirewallRule {
     /// Rule index (ordering within the ruleset).
     ///
     /// The Private v1 API sends this as a JSON number on some controller
-    /// versions and a numeric string on others; [`deserialize_rule_index`]
+    /// versions and a numeric string on others; `deserialize_rule_index`
     /// accepts either (and an empty string, as `None`) rather than failing
     /// the whole list on whichever shape the fixture was not written
     /// against.
