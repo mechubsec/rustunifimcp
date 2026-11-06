@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Validation now refuses a reservation whose `network_id` is not a network on
   the controller, or is one the same change set deletes (#143). The network
   list is fetched only when a staged body names a `network_id`.
+- Post-apply verification now also compares nested fields such as a policy's
+  `source.zone_id`, by path, and scalar arrays without regard to order (#143).
 
 ## [0.6.8] - 2026-11-04
 
