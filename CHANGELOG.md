@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `unifi_apply_change_set` now reports `failed`, not `partial`, when the
+  controller refuses the first change with a 4xx: nothing was written and
+  nothing needed rolling back. A first change that fails any other way (a 5xx,
+  a timeout, a create answered without an id) is still `partial`, since it may
+  have landed; check the controller. The `unifi_change_set_applied` audit
+  event's `outcome` carries the same value. The stored change set is `Failed`
+  in both cases, as before.
+
 ### Fixed
 
 - Staging a `firewall_policy` whose `action` is `BLOCK` or `REJECT` now requires

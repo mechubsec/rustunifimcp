@@ -2209,6 +2209,7 @@ impl UnifiServer {
         let state_str = match outcome.state {
             State::Applied => "applied",
             State::AppliedUnverified => "applied_unverified",
+            State::Failed => "failed",
             State::Partial => "partial",
             State::PartialRollbackFailed => "partial_rollback_failed",
             State::RefusedStale => "refused_stale",

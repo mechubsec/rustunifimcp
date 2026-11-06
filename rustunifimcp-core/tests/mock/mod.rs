@@ -30,6 +30,10 @@ struct MockState {
 enum Behavior {
     SucceedAll,
     FailAt(usize),
+    /// Like `FailAt`, but the controller refuses with a 400 instead of a 500.
+    RefuseAt(usize),
+    /// Like `FailAt`, but the private endpoint answers 404.
+    EndpointAbsentAt(usize),
     FailAtWithRollbackFailure {
         fail_at: usize,
         rollback_fail_at: usize,
@@ -102,6 +106,24 @@ impl MockController {
         self
     }
 
+    /// Configure the mock to refuse the nth mutation (1-indexed) with a 400.
+    #[must_use]
+    pub fn refuse_at(mut self, n: usize) -> Self {
+        Arc::get_mut(&mut self.state)
+            .expect("mock state should be exclusively owned during configuration")
+            .behavior = Behavior::RefuseAt(n);
+        self
+    }
+
+    /// Configure the mock so the nth mutation's (1-indexed) private endpoint answers 404.
+    #[must_use]
+    pub fn endpoint_absent_at(mut self, n: usize) -> Self {
+        Arc::get_mut(&mut self.state)
+            .expect("mock state should be exclusively owned during configuration")
+            .behavior = Behavior::EndpointAbsentAt(n);
+        self
+    }
+
     /// Configure the mock to fail rollback at the nth rollback operation (1-indexed).
     #[must_use]
     pub fn fail_rollback_at(mut self, rollback_fail_at: usize) -> Self {
@@ -164,9 +186,10 @@ impl ControllerOps for MockController {
     ) -> Result<Option<String>, UnifiError> {
         let should_fail = match &self.state.behavior {
             Behavior::SucceedAll => false,
-            Behavior::FailAt(n) | Behavior::FailAtWithRollbackFailure { fail_at: n, .. } => {
-                index + 1 >= *n
-            }
+            Behavior::FailAt(n)
+            | Behavior::RefuseAt(n)
+            | Behavior::EndpointAbsentAt(n)
+            | Behavior::FailAtWithRollbackFailure { fail_at: n, .. } => index + 1 >= *n,
             Behavior::DriftBeforeApply
             | Behavior::PreimageCheckErrors
             | Behavior::VerificationFails => false,
@@ -175,9 +198,21 @@ impl ControllerOps for MockController {
         self.state.write_calls.fetch_add(1, Ordering::SeqCst);
 
         if should_fail {
-            Err(UnifiError::Upstream {
-                status: 500,
-                detail: format!("mock failure at mutation {}", index + 1),
+            let detail = format!("mock failure at mutation {}", index + 1);
+            Err(match self.state.behavior {
+                Behavior::RefuseAt(_) => UnifiError::Upstream {
+                    status: 400,
+                    detail,
+                },
+                Behavior::EndpointAbsentAt(_) => UnifiError::PrivateEndpointAbsent {
+                    surface: rustunifimcp_core::ApiSurface::PrivateV2,
+                    path: "/mock".to_owned(),
+                    controller_version: "mock".to_owned(),
+                },
+                _ => UnifiError::Upstream {
+                    status: 500,
+                    detail,
+                },
             })
         } else {
             // Return a mock ID for creates

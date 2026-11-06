@@ -43,7 +43,11 @@ pub enum State {
     Applied,
     /// All mutations succeeded but verification could not confirm.
     AppliedUnverified,
-    /// Some mutations succeeded, some failed.
+    /// The controller refused the first mutation with a 4xx, so nothing was
+    /// written and nothing needed rolling back.
+    Failed,
+    /// A mutation failed and what landed before it was rolled back. A first
+    /// mutation that failed without a 4xx is also `Partial`: it may have landed.
     Partial,
     /// Partial apply with failed rollback.
     PartialRollbackFailed,
@@ -87,6 +91,7 @@ where
     let mut attempted_and_failed = Vec::new();
     let mut never_attempted = Vec::new();
     let mut apply_failure = None;
+    let mut refused = false;
     let mut created_ids: std::collections::HashMap<usize, String> =
         std::collections::HashMap::new();
 
@@ -100,7 +105,16 @@ where
                 }
             }
             Err(error) => {
-                // This mutation failed
+                // A 4xx (a private endpoint's 404 included) is the controller's own
+                // refusal, so nothing was written. Any other error (a 5xx, a timeout,
+                // a create answered without an id) may follow a write that landed.
+                refused = matches!(
+                    error,
+                    crate::error::UnifiError::Upstream {
+                        status: 400..=499,
+                        ..
+                    } | crate::error::UnifiError::PrivateEndpointAbsent { .. }
+                );
                 apply_failure = Some(format!(
                     "mutation {index} ({}): {error}",
                     mutation.preview()
@@ -129,6 +143,23 @@ where
             rollback_failures: Vec::new(),
             verification_failure,
             apply_failure: None,
+        };
+    }
+
+    // The controller refused the first mutation: nothing landed, so there is
+    // nothing to roll back. An ambiguous first failure stays `Partial`.
+    if succeeded.is_empty() && refused {
+        let mut failed = attempted_and_failed.clone();
+        failed.extend(never_attempted.clone());
+        return Outcome {
+            state: State::Failed,
+            succeeded,
+            failed,
+            attempted_and_failed,
+            never_attempted,
+            rollback_failures: Vec::new(),
+            verification_failure: None,
+            apply_failure,
         };
     }
 
