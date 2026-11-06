@@ -104,7 +104,7 @@ const DEVICE_STATS_FIELDS: FieldAllowlist = FieldAllowlist::new(&[
 /// `mac_table` and counters are dropped.
 const WAN_PORT_FIELDS: FieldAllowlist = FieldAllowlist::new(&["ip", "up", "status"]);
 
-/// Project a private `stat/device` record down to [`DEVICE_STATS_FIELDS`].
+/// Project a private `stat/device` record down to `DEVICE_STATS_FIELDS`.
 #[must_use]
 pub fn project_device_stats(value: &Value) -> Value {
     let mut projected = DEVICE_STATS_FIELDS.project(value);

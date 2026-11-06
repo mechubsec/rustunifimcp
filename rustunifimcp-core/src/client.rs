@@ -15,7 +15,7 @@
 //! a path, with no way to attach the percent-encoded query string this client
 //! appends for pagination (`offset`/`limit`). The path portion is still
 //! validated through `expand_path` before the URL string is assembled, and
-//! every query key/value goes through [`percent_encode`], which escapes
+//! every query key/value goes through `percent_encode`, which escapes
 //! everything outside RFC 3986 `unreserved` -- so this keeps the same
 //! injection resistance `with_base_and_path` provides for the path, just
 //! without its compile-time type for the part it does not cover.

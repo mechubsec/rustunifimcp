@@ -103,6 +103,24 @@ pub fn fixture(version: &str, name: &str) -> serde_json::Value {
         .unwrap_or_else(|error| panic!("fixture {} is not JSON: {error}", path.display()))
 }
 
+/// Whether a fixture file was recorded for this endpoint on this version.
+///
+/// False for both a `.absent` marker and a kind the recording predates (an
+/// older capture never fetched endpoints added to `capture-fixtures.sh` later).
+#[must_use]
+pub fn has_fixture(version: &str, name: &str) -> bool {
+    let path: PathBuf = [
+        env!("CARGO_MANIFEST_DIR"),
+        "tests",
+        "fixtures",
+        version,
+        &format!("{name}.json"),
+    ]
+    .iter()
+    .collect();
+    path.exists()
+}
+
 /// Whether an endpoint was recorded as absent on this controller version.
 ///
 /// `capture-fixtures.sh` writes a `.absent` marker when a route 404s, so the
