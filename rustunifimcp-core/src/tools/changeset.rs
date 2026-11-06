@@ -56,8 +56,9 @@ pub const DESCRIPTIONS: &[(&str, &str)] = &[
         "Applies the staged changes as a sequence of independent REST calls \
          against live configuration. UniFi has no candidate configuration and no \
          commit, so a partial failure is a reachable outcome and is recorded as \
-         `partial`. Rollback replays a stored pre-image and is best-effort; it \
-         can itself fail.",
+         `partial`. An apply whose first change the controller refuses (a 4xx) \
+         wrote nothing and is recorded as `failed`. Rollback replays a stored \
+         pre-image and is best-effort; it can itself fail.",
     ),
     (
         "unifi_get_change_set",

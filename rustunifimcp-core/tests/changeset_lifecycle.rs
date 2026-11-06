@@ -65,6 +65,45 @@ async fn a_failure_midway_reports_partial_and_names_both_sides() {
 }
 
 #[tokio::test]
+async fn a_refusal_of_the_first_mutation_reports_failed_and_rolls_back_nothing() {
+    let controller = MockController::new().refuse_at(1);
+    let outcome = run_change_set(&controller, five_mutations()).await;
+
+    assert_eq!(outcome.state, State::Failed);
+    assert!(outcome.succeeded.is_empty(), "nothing landed");
+    assert_eq!(outcome.failed.len(), 5);
+    assert_eq!(outcome.attempted_and_failed.len(), 1);
+    assert_eq!(outcome.never_attempted.len(), 4);
+    assert_eq!(controller.rollback_calls(), 0, "nothing to roll back");
+    let reason = outcome
+        .apply_failure
+        .expect("a failed mutation must say why");
+    assert!(reason.starts_with("mutation 0 ("), "{reason}");
+}
+
+/// A private endpoint's 404 reaches apply as its own error variant, not a
+/// status, and is a refusal all the same.
+#[tokio::test]
+async fn a_private_404_on_the_first_mutation_reports_failed() {
+    let controller = MockController::new().endpoint_absent_at(1);
+    let outcome = run_change_set(&controller, five_mutations()).await;
+
+    assert_eq!(outcome.state, State::Failed);
+    assert_eq!(controller.rollback_calls(), 0);
+}
+
+/// A 5xx, a timeout or a create answered without an id may follow a write
+/// that landed, so only a 4xx may claim nothing was written.
+#[tokio::test]
+async fn an_ambiguous_first_failure_stays_partial() {
+    let controller = MockController::new().fail_at(1);
+    let outcome = run_change_set(&controller, five_mutations()).await;
+
+    assert_eq!(outcome.state, State::Partial);
+    assert!(outcome.succeeded.is_empty());
+}
+
+#[tokio::test]
 async fn a_partial_apply_attempts_rollback_of_what_landed() {
     let controller = MockController::new().fail_at(3);
     let _outcome = run_change_set(&controller, five_mutations()).await;
