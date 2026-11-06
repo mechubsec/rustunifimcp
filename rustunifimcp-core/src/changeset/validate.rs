@@ -620,9 +620,106 @@ pub fn check_zone_references(
     Ok(())
 }
 
+/// The network `_id`s staged `Create`/`Update` bodies carry as `network_id`
+/// (a client reservation moving to another network), in staging order.
+///
+/// Empty means no staged body names a network, so the caller can skip fetching
+/// the network list.
+#[must_use]
+pub fn referenced_network_ids(mutations: &[StagedMutation]) -> Vec<String> {
+    let mut referenced = Vec::new();
+
+    for mutation in mutations {
+        let body = match mutation {
+            StagedMutation::Create { body, .. } | StagedMutation::Update { body, .. } => body,
+            StagedMutation::Delete { .. } | StagedMutation::Restore { .. } => continue,
+        };
+
+        let Some(network_id) = body.get("network_id").and_then(Value::as_str) else {
+            continue;
+        };
+        if !referenced.iter().any(|seen| seen == network_id) {
+            referenced.push(network_id.to_owned());
+        }
+    }
+
+    referenced
+}
+
+/// The resource kind whose deletion removes a network a reservation could name.
+const NETWORK_KIND: &str = "network";
+
+/// Check that every `network_id` a staged body names is a live network that
+/// this change set does not itself delete.
+///
+/// `network_list` is the controller's network list as
+/// [`crate::tools::read::list_resources`] returns it: an array of objects
+/// each carrying an `_id`.
+///
+/// # Errors
+///
+/// Returns [`UnifiError::Malformed`] if the list cannot be read, which is a
+/// different operator response from "the network is not there", and
+/// [`UnifiError::ReferenceNotFound`] if a staged body names an absent network
+/// or one the set deletes.
+pub fn check_network_references(
+    network_list: &Value,
+    mutations: &[StagedMutation],
+) -> Result<(), UnifiError> {
+    let items = network_list
+        .as_array()
+        .ok_or_else(|| UnifiError::Malformed("network list is not an array".to_owned()))?;
+
+    let mut live_ids = BTreeSet::new();
+    for (position, item) in items.iter().enumerate() {
+        let id = item.get("_id").and_then(Value::as_str).ok_or_else(|| {
+            UnifiError::Malformed(format!("network at position {position} has no `_id`"))
+        })?;
+        live_ids.insert(id);
+    }
+
+    let deleted: BTreeSet<&str> = mutations
+        .iter()
+        .filter_map(|mutation| match mutation {
+            StagedMutation::Delete { kind, id } if kind == NETWORK_KIND => Some(id.as_str()),
+            _ => None,
+        })
+        .collect();
+
+    for mutation in mutations {
+        let body = match mutation {
+            StagedMutation::Create { body, .. } | StagedMutation::Update { body, .. } => body,
+            StagedMutation::Delete { .. } | StagedMutation::Restore { .. } => continue,
+        };
+        let Some(network_id) = body.get("network_id").and_then(Value::as_str) else {
+            continue;
+        };
+
+        if !live_ids.contains(network_id) {
+            return Err(UnifiError::ReferenceNotFound(format!(
+                "staged {} names network_id '{network_id}', which is not one of the \
+                 {} networks on this controller",
+                mutation.preview(),
+                live_ids.len()
+            )));
+        }
+        if deleted.contains(network_id) {
+            return Err(UnifiError::ReferenceNotFound(format!(
+                "staged {} names network_id '{network_id}', which this change set deletes",
+                mutation.preview()
+            )));
+        }
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{ZoneIndex, check_zone_deletions, check_zone_references, referenced_zone_ids};
+    use super::{
+        ZoneIndex, check_network_references, check_zone_deletions, check_zone_references,
+        referenced_network_ids, referenced_zone_ids,
+    };
     use crate::changeset::{Preimage, StagedMutation};
     use serde_json::{Value, json};
 
@@ -1029,6 +1126,68 @@ mod tests {
         assert_eq!(
             referenced_zone_ids(&[staged]),
             vec!["aaaaaaaaaaaaaaaaaaaaaaaa"]
+        );
+    }
+
+    fn network_list() -> serde_json::Value {
+        json!([
+            { "_id": "dddddddddddddddddddddddd", "name": "Default" },
+            { "_id": "eeeeeeeeeeeeeeeeeeeeeeee", "name": "IoT" }
+        ])
+    }
+
+    fn reservation_on(network_id: &str) -> StagedMutation {
+        StagedMutation::update(
+            "dhcp_reservation",
+            "ffffffffffffffffffffffff",
+            json!({ "network_id": network_id }),
+        )
+    }
+
+    #[test]
+    fn a_reservation_moving_to_a_listed_network_passes() {
+        let staged = reservation_on("eeeeeeeeeeeeeeeeeeeeeeee");
+        assert!(check_network_references(&network_list(), &[staged]).is_ok());
+    }
+
+    #[test]
+    fn a_reservation_moving_to_an_absent_network_is_refused() {
+        let staged = reservation_on("000000000000000000000000");
+        let rendered = check_network_references(&network_list(), &[staged])
+            .expect_err("an absent network must be caught")
+            .to_string();
+        assert!(rendered.contains("network_id"), "{rendered}");
+        assert!(rendered.contains("000000000000000000000000"), "{rendered}");
+        assert!(rendered.contains("2 networks"), "{rendered}");
+    }
+
+    #[test]
+    fn a_reservation_moving_to_a_network_the_set_deletes_is_refused() {
+        let mutations = [
+            reservation_on("eeeeeeeeeeeeeeeeeeeeeeee"),
+            StagedMutation::delete("network", "eeeeeeeeeeeeeeeeeeeeeeee"),
+        ];
+        let rendered = check_network_references(&network_list(), &mutations)
+            .expect_err("a deleted network is absent")
+            .to_string();
+        assert!(rendered.contains("deletes"), "{rendered}");
+    }
+
+    #[test]
+    fn an_unreadable_network_list_is_a_parse_failure() {
+        let error = check_network_references(&json!({ "data": [] }), &[reservation_on("x")])
+            .expect_err("an envelope is not an array");
+        assert!(error.to_string().contains("not an array"), "{error}");
+    }
+
+    #[test]
+    fn no_network_id_means_nothing_to_fetch() {
+        let staged = StagedMutation::update("dhcp_reservation", "u1", json!({ "hostname": "a" }));
+        assert!(referenced_network_ids(&[staged]).is_empty());
+        let named = reservation_on("eeeeeeeeeeeeeeeeeeeeeeee");
+        assert_eq!(
+            referenced_network_ids(&[named]),
+            ["eeeeeeeeeeeeeeeeeeeeeeee"]
         );
     }
 }

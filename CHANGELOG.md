@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   failed rollback.
   Staging `default_zone` or `external_id` on a zone is now refused at staging:
   the controller rejects both on create and update (UniFi Network 11.0.97).
+- Validation now refuses a reservation whose `network_id` is not a network on
+  the controller, or is one the same change set deletes (#143). The network
+  list is fetched only when a staged body names a `network_id`.
 
 ## [0.6.8] - 2026-11-04
 

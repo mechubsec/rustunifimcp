@@ -21,8 +21,8 @@ pub use record::{
 };
 pub use rollback::rollback_to_preimage;
 pub use validate::{
-    ZoneIndex, check_writable_fields, check_zone_deletions, check_zone_references,
-    referenced_zone_ids, validate_locally,
+    ZoneIndex, check_network_references, check_writable_fields, check_zone_deletions,
+    check_zone_references, referenced_network_ids, referenced_zone_ids, validate_locally,
 };
 
 // mecmcp#335 landed in mecmcp-changeset v0.22.0: `Atomicity` and
