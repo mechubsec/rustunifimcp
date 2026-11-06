@@ -224,6 +224,10 @@ pub fn check_writable_fields(mutations: &[StagedMutation]) -> Result<(), UnifiEr
         }
 
         check_dhcp_reservation_fixedip(mutation, resource_kind, object)?;
+        // shortcut: body-only, so an update setting only create_allow_respond: true on a
+        // policy already BLOCK/REJECT passes staging and is refused at apply (then rolled
+        // back); check the effective body against the pre-image if that shows up.
+        check_firewall_policy_respond(mutation, resource_kind, object)?;
     }
     Ok(())
 }
@@ -254,6 +258,34 @@ fn check_dhcp_reservation_fixedip(
         )));
     }
     Ok(())
+}
+
+/// The controller refuses a zone-based `firewall_policy` whose `action` is not
+/// `ALLOW` unless `create_allow_respond` is `false`, and defaults the field to
+/// `true` when a create leaves it out. A body that sets such an action without
+/// `create_allow_respond: false` is refused here, on create and update alike
+/// (checked live on UniFi Network 11.0.97, issue #143 follow-up).
+fn check_firewall_policy_respond(
+    mutation: &StagedMutation,
+    kind: ResourceKind,
+    object: &serde_json::Map<String, Value>,
+) -> Result<(), UnifiError> {
+    if kind != ResourceKind::FirewallPolicy {
+        return Ok(());
+    }
+    let Some(action) = object.get("action").and_then(Value::as_str) else {
+        return Ok(());
+    };
+    if action == "ALLOW" || object.get("create_allow_respond") == Some(&Value::Bool(false)) {
+        return Ok(());
+    }
+    Err(UnifiError::WriteRefused(format!(
+        "staged {} sets action '{action}' without 'create_allow_respond: false'; the \
+         controller refuses a BLOCK or REJECT policy that allows respond traffic, and \
+         defaults the field to true when it is left out. Stage 'create_allow_respond': \
+         false explicitly",
+        mutation.preview()
+    )))
 }
 
 /// Validate that all staged mutations are covered by the pre-image.
@@ -1256,6 +1288,43 @@ mod writable_fields_tests {
         assert!(check_writable_fields(&[ok]).is_ok());
         let no_ip = StagedMutation::create("dhcp_reservation", json!({ "mac": mac }));
         assert!(check_writable_fields(&[no_ip]).is_ok());
+    }
+
+    /// The controller refuses a BLOCK or REJECT policy unless
+    /// `create_allow_respond` is `false`, so staging must say so.
+    #[test]
+    fn firewall_policy_non_allow_requires_create_allow_respond_false() {
+        let refused = [
+            StagedMutation::create("firewall_policy", json!({ "name": "p", "action": "BLOCK" })),
+            StagedMutation::create(
+                "firewall_policy",
+                json!({ "action": "REJECT", "create_allow_respond": true }),
+            ),
+            StagedMutation::update("firewall_policy", "p1", json!({ "action": "BLOCK" })),
+        ];
+        for staged in refused {
+            let error = check_writable_fields(&[staged]).expect_err("respond traffic refused");
+            assert!(
+                error.to_string().contains("create_allow_respond"),
+                "{error}"
+            );
+        }
+        let allowed = [
+            StagedMutation::create(
+                "firewall_policy",
+                json!({ "action": "BLOCK", "create_allow_respond": false }),
+            ),
+            StagedMutation::create("firewall_policy", json!({ "action": "ALLOW" })),
+            StagedMutation::update(
+                "firewall_policy",
+                "p1",
+                json!({ "action": "BLOCK", "create_allow_respond": false }),
+            ),
+            StagedMutation::update("firewall_policy", "p1", json!({ "name": "x" })),
+        ];
+        for staged in allowed {
+            assert!(check_writable_fields(&[staged]).is_ok());
+        }
     }
 
     /// Deleting a reservation would DELETE the client's whole `user` record;
