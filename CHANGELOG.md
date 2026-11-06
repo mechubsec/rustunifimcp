@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.10] - 2026-11-06
+
 ### Changed
 
 - `unifi_apply_change_set` now reports `failed`, not `partial`, when the
