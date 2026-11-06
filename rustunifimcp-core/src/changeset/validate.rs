@@ -279,6 +279,13 @@ fn check_firewall_policy_respond(
     if action == "ALLOW" || object.get("create_allow_respond") == Some(&Value::Bool(false)) {
         return Ok(());
     }
+    // The controller's own predefined BLOCK policies carry `create_allow_respond: true`
+    // (10.5.67), so a re-staged one is left for the controller to judge.
+    // shortcut: `predefined` is read from the staged body, so a body can claim it and
+    // reach apply, as before #164; read it from the pre-image with the check above.
+    if object.get("predefined") == Some(&Value::Bool(true)) {
+        return Ok(());
+    }
     Err(UnifiError::WriteRefused(format!(
         "staged {} sets action '{action}' without 'create_allow_respond: false'; the \
          controller refuses a BLOCK or REJECT policy that allows respond traffic, and \
@@ -1321,6 +1328,11 @@ mod writable_fields_tests {
                 json!({ "action": "BLOCK", "create_allow_respond": false }),
             ),
             StagedMutation::update("firewall_policy", "p1", json!({ "name": "x" })),
+            StagedMutation::update(
+                "firewall_policy",
+                "p1",
+                json!({ "action": "BLOCK", "create_allow_respond": true, "predefined": true }),
+            ),
         ];
         for staged in allowed {
             assert!(check_writable_fields(&[staged]).is_ok());

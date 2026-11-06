@@ -23,6 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `create_allow_respond: false`. The controller refuses such a policy
   otherwise, on create and on update, and defaults the field to `true` when it
   is left out (UniFi Network 11.0.97). Before, the refusal came only at apply.
+  A `predefined` policy is not checked: the controller's own BLOCK policies
+  carry `create_allow_respond: true`.
 
 ## [0.6.9] - 2026-11-05
 
