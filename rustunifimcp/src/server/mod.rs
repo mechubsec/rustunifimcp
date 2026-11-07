@@ -3555,6 +3555,29 @@ mod tests {
     /// staged before this check existed, or built by an older binary and
     /// loaded back from `--state-file`.
     fn device_update_record(owner: &str, controller: &str, ttl: u64) -> ChangeSetRecord {
+        let staged = vec![StagedMutation::update(
+            "device",
+            "abc123",
+            serde_json::json!({ "name": "renamed-ap" }),
+        )];
+        planned_record_with(
+            owner,
+            controller,
+            ttl,
+            &staged,
+            &Preimage::from_resources(Vec::new()),
+        )
+    }
+
+    /// A `Planned` record carrying exactly the given staged mutations and
+    /// pre-image, built the way `device_update_record` is.
+    fn planned_record_with(
+        owner: &str,
+        controller: &str,
+        ttl: u64,
+        staged: &[StagedMutation],
+        preimage: &Preimage,
+    ) -> ChangeSetRecord {
         let record = ChangeSetRecord {
             id: crate::changeset_state::new_change_set_id(),
             owner: owner.to_owned(),
@@ -3575,19 +3598,9 @@ mod tests {
             owner_subject: None,
             owner_verified: false,
         };
-        let staged = vec![StagedMutation::update(
-            "device",
-            "abc123",
-            serde_json::json!({ "name": "renamed-ap" }),
-        )];
-        UnifiServer::with_plan(
-            record,
-            &staged,
-            &Preimage::from_resources(Vec::new()),
-            "test",
-        )
-        .map_err(|_| "with_plan refused a device-update record")
-        .expect("with_plan plans a mutation check_writable_fields will separately refuse")
+        UnifiServer::with_plan(record, staged, preimage, "test")
+            .map_err(|_| "with_plan refused a seeded record")
+            .expect("with_plan plans a mutation a later check will separately refuse")
     }
 
     /// Drive one tool call over an in-process transport, the way a real MCP
@@ -3682,5 +3695,123 @@ mod tests {
             ChangeSetState::Failed,
             "a claim that never wrote anything must not be left Applying"
         );
+    }
+
+    /// A record staging `create_allow_respond: true` on a BLOCK policy that
+    /// the pre-image holds as a non-predefined `create_allow_respond: false`
+    /// one -- the shape the respond-traffic check exists to refuse.
+    fn respond_traffic_record(owner: &str, controller: &str, ttl: u64) -> ChangeSetRecord {
+        let staged = vec![StagedMutation::update(
+            "firewall_policy",
+            "000000000000000000000301",
+            serde_json::json!({ "create_allow_respond": true }),
+        )];
+        let preimage = Preimage::from_resources(vec![serde_json::json!({
+            "_id": "000000000000000000000301",
+            "action": "BLOCK",
+            "create_allow_respond": false,
+            "predefined": false,
+        })]);
+        planned_record_with(owner, controller, ttl, &staged, &preimage)
+    }
+
+    /// Validation is the first place an operator learns a plan is refused, so
+    /// the respond-traffic check must run there and name the field.
+    #[tokio::test]
+    async fn validate_refuses_respond_traffic_on_a_block_policy() {
+        let coordinator = coordinator_at(None);
+        let record = respond_traffic_record("alice", "home", 300);
+        let id = record.id.clone();
+        coordinator.insert_change_set(record).await.expect("insert");
+        let server = UnifiServer::new(
+            controller_registry(),
+            true,
+            coordinator,
+            None,
+            mecmcp_audit::DirectCommitPolicy::new(false),
+        )
+        .expect("server");
+
+        let refused = call(
+            server,
+            "unifi_validate_change_set",
+            serde_json::json!({"controller": "home", "change_set_id": id}),
+        )
+        .await;
+        let error = refused.expect_err("respond traffic on a BLOCK policy is refused");
+        assert!(error.contains("create_allow_respond"), "{error}");
+    }
+
+    /// An approval attests to a plan that can be applied, so the approver is
+    /// refused before any approval is recorded.
+    #[tokio::test]
+    async fn approve_refuses_respond_traffic_on_a_block_policy() {
+        let coordinator = coordinator_at(None);
+        let record = respond_traffic_record("alice", "home", 300);
+        let id = record.id.clone();
+        coordinator.insert_change_set(record).await.expect("insert");
+        let server = UnifiServer::new(
+            controller_registry(),
+            true,
+            coordinator,
+            None,
+            mecmcp_audit::DirectCommitPolicy::new(false),
+        )
+        .expect("server");
+
+        let refused = call(
+            server,
+            "unifi_approve_change_set",
+            serde_json::json!({"controller": "home", "change_set_id": id}),
+        )
+        .await;
+        let error = refused.expect_err("respond traffic on a BLOCK policy is refused");
+        assert!(error.contains("create_allow_respond"), "{error}");
+    }
+
+    /// A plan approved before the check existed must still be refused at
+    /// apply, settle to `Failed`, and never reach the controller (unreachable
+    /// here, so any other outcome means the check ran too late).
+    #[tokio::test]
+    async fn apply_refuses_a_seeded_respond_traffic_plan_with_no_controller_call() {
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
+        let coordinator = coordinator_at(None);
+        let record = respond_traffic_record("alice", "home", 300);
+        let (id, digest) = (record.id.clone(), record.digest.clone());
+        coordinator.insert_change_set(record).await.expect("insert");
+        coordinator
+            .approve_change_set(
+                id.clone(),
+                "home".to_owned(),
+                &human_approver("bob"),
+                digest,
+            )
+            .await
+            .expect("a second principal approves");
+
+        let server = UnifiServer::new(
+            controller_registry(),
+            true,
+            coordinator.clone(),
+            None,
+            mecmcp_audit::DirectCommitPolicy::new(false),
+        )
+        .expect("server");
+
+        let refused = call(
+            server,
+            "unifi_apply_change_set",
+            serde_json::json!({"controller": "home", "change_set_id": id}),
+        )
+        .await;
+        let error = refused.expect_err("respond traffic on a BLOCK policy is refused");
+        assert!(error.contains("create_allow_respond"), "{error}");
+
+        let settled = coordinator
+            .change_set(&id, "home")
+            .await
+            .expect("the record must still be readable");
+        assert_eq!(settled.state, ChangeSetState::Failed);
     }
 }
