@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Validation now checks a `firewall_policy` update's effective `action` and
+  `create_allow_respond` against the live policy, so an update that sets only
+  `create_allow_respond: true` on a BLOCK or REJECT policy, or that claims
+  `predefined`, is refused at validation, at approval, and by apply before it
+  writes anything, instead of by the controller. Whether a policy is
+  predefined is read from the controller's copy.
+
 ## [0.6.10] - 2026-11-06
 
 ### Changed
