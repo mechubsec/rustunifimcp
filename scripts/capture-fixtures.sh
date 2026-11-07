@@ -26,6 +26,8 @@ printf 'site name=%s uuid=%s\n' "$SITE" "$SITE_UUID"
 
 OUT="rustunifimcp-core/tests/fixtures/$VERSION"
 mkdir -p "$OUT"
+rm -f "$OUT/manifest.txt"
+: > "$OUT/manifest.partial"
 printf 'capturing controller %s into %s\n' "$VERSION" "$OUT"
 
 # Only a 404 means "this endpoint is not on this controller version". Anything
@@ -37,6 +39,9 @@ capture() {
     name=$1; path=$2
     code=$(curl -sS -o "$OUT/$name.raw" -w '%{http_code}' \
         -H "X-API-KEY: $UNIFI_API_KEY" "$CONTROLLER$path")
+    # Every attempt is listed, so an endpoint that left no file is distinguishable
+    # from one this capture never fetched.
+    printf '%s %s\n' "$name" "$code" >> "$OUT/manifest.partial"
     case "$code" in
         200)
             python3 -m json.tool < "$OUT/$name.raw" > "$OUT/$name.json"
@@ -90,6 +95,10 @@ if [ "$FAILED" -ne 0 ]; then
     printf 'bug in the path, not evidence the endpoint is gone.\n' >&2
     exit 1
 fi
+
+# Published only now: an aborted or failed capture leaves no manifest, so the
+# matrix cannot mistake the endpoints it never reached for ones it predates.
+mv "$OUT/manifest.partial" "$OUT/manifest.txt"
 
 printf 'done: %s\n' "$OUT"
 ls -1 "$OUT"

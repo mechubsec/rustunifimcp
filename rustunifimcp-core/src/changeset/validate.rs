@@ -1654,12 +1654,20 @@ mod writable_fields_tests {
             "match_opposite_protocol": false
         });
         let mut bodies = vec![inline];
-        for version in crate::testing::recorded_versions() {
+        for version in crate::testing::fixture_versions() {
             let recorded = crate::testing::fixture(&version, "policies");
             bodies.extend(recorded.as_array().cloned().unwrap_or_default());
         }
         for mut body in bodies {
-            for field in ["_id", "hits", "last_hit", "origin_id", "origin_type"] {
+            // `x_shared_secret` is the synthetic set's scrub-gate canary, not a controller field.
+            for field in [
+                "_id",
+                "hits",
+                "last_hit",
+                "origin_id",
+                "origin_type",
+                "x_shared_secret",
+            ] {
                 body.as_object_mut().expect("object").remove(field);
             }
             let staged = StagedMutation::create("firewall_policy", body);

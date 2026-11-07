@@ -13,5 +13,37 @@
       "zone_id": "000000000000000000000101"
     },
     "x_shared_secret": "EXAMPLE-policy-shared-secret-fake1"
+  },
+  {
+    "_id": "000000000000000000000202",
+    "name": "Block Invalid Traffic",
+    "action": "BLOCK",
+    "enabled": true,
+    "index": 10001,
+    "predefined": true,
+    "protocol": "all",
+    "ip_version": "BOTH",
+    "logging": false,
+    "connection_state_type": "CUSTOM",
+    "connection_states": [
+      "INVALID"
+    ],
+    "schedule": {
+      "mode": "ALWAYS"
+    },
+    "source": {
+      "zone_id": "000000000000000000000101",
+      "matching_target": "ANY"
+    },
+    "destination": {
+      "zone_id": "000000000000000000000101",
+      "matching_target": "ANY"
+    },
+    "description": "",
+    "create_allow_respond": true,
+    "icmp_typename": "ANY",
+    "icmp_v6_typename": "ANY",
+    "match_ip_sec": false,
+    "match_opposite_protocol": false
   }
 ]

@@ -6,7 +6,9 @@
 //! 03:00.
 
 use rustunifimcp_core::model::ResourceKind;
-use rustunifimcp_core::testing::{has_fixture, is_absent, recorded_fixtures_available};
+use rustunifimcp_core::testing::{
+    capture_attempted, has_fixture, is_absent, recorded_fixtures_available,
+};
 use rustunifimcp_core::version::{Availability, endpoint_availability};
 
 /// Every recorded controller version under tests/fixtures/.
@@ -46,10 +48,24 @@ fn the_matrix_agrees_with_what_was_recorded() {
 
             let fixture_exists = has_fixture(&version, fixture_name);
 
-            // Neither fixture nor marker: an older recording predates this kind.
+            // Neither fixture nor marker: only a manifest that never listed the
+            // kind proves the capture predates it.
             if !recorded_absent && !fixture_exists {
-                eprintln!("SKIPPED: {kind:?} was not recorded for {version}");
-                continue;
+                match capture_attempted(&version, fixture_name) {
+                    Some(false) => {
+                        eprintln!("SKIPPED: the {version} capture predates {kind:?}");
+                        continue;
+                    }
+                    Some(true) => panic!(
+                        "{kind:?} on {version} was attempted but left no fixture or .absent \
+                         marker: an unexpected status or a deleted file; recapture"
+                    ),
+                    None => panic!(
+                        "{kind:?} on {version} has no fixture or marker and {version} has no \
+                         manifest.txt; recapture with the current script, or write manifest.txt \
+                         listing what the old capture fetched"
+                    ),
+                }
             }
 
             // Determine expected availability based on evidence
