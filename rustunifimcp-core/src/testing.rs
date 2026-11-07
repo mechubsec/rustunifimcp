@@ -140,6 +140,30 @@ pub fn is_absent(version: &str, name: &str) -> bool {
     path.exists()
 }
 
+/// Whether the capture of this version attempted the endpoint, per the
+/// `manifest.txt` that `capture-fixtures.sh` writes.
+///
+/// `None` when the recording has no manifest (it predates the manifest). Lets
+/// the matrix tell "never attempted" from "attempted and left no evidence": an
+/// unexpected status leaves neither fixture nor marker, and so does a deleted file.
+#[must_use]
+pub fn capture_attempted(version: &str, name: &str) -> Option<bool> {
+    let path: PathBuf = [
+        env!("CARGO_MANIFEST_DIR"),
+        "tests",
+        "fixtures",
+        version,
+        "manifest.txt",
+    ]
+    .iter()
+    .collect();
+    let raw = std::fs::read_to_string(path).ok()?;
+    Some(
+        raw.lines()
+            .any(|line| line.split_whitespace().next() == Some(name)),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::{SYNTHETIC_FIXTURE_VERSION, fixture, fixture_versions, recorded_versions};

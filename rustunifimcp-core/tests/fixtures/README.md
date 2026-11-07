@@ -16,6 +16,12 @@ never running them. The scrub gate (`scripts/verify-fixtures-scrubbed.sh`)
 enforces that the synthetic set contains no sensitive data, and
 `tests/fixture_scrub_gate.rs` verifies the gate passes on the committed set.
 
+`policies.json` carries a controller-predefined BLOCK policy
+(`000000000000000000000202`, `predefined: true`, `create_allow_respond: true`).
+Real controllers ship such policies, and the respond-traffic staging check must
+not refuse them; CI has no recorded set, so without this entry nothing would
+catch a regression there.
+
 ## Recorded Fixtures
 
 The **recorded** sets are captured per controller version by
@@ -101,7 +107,12 @@ report success.
    `rustunifimcp-core/src/version.rs` for the new version. Every row must be
    justified by a fixture or an `.absent` marker — never guess. If any
    endpoint returned HTTP 404, create a `.absent` marker file (e.g.,
-   `10.5.67/policies.absent`) in the version directory. The matrix test
+   `10.5.67/policies.absent`) in the version directory. The capture also writes
+   `manifest.txt` (`<name> <http_code>` per attempted endpoint, published only
+   when the whole capture succeeds); a kind with neither fixture nor marker is
+   skipped only if the manifest shows it was never attempted, and fails
+   otherwise (unexpected status or a deleted file). A recording with no
+   manifest must be recaptured, or given one by hand. The matrix test
    (`tests/version_matrix.rs`) will fail if the matrix and fixtures disagree.
 
 5. **Remove the `#[ignore]` attribute** — once at least two controller versions
