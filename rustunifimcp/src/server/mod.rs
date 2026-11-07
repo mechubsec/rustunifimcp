@@ -23,9 +23,10 @@ use rmcp::{
 use rustunifimcp_core::{
     changeset::{
         Preimage, StagedMutation, State, UnifiTransaction, ZoneIndex, actions_for,
-        apply_sequentially, check_network_references, check_writable_fields, check_zone_deletions,
-        check_zone_references, diff_against_preimage, fingerprint_of, mutations_of, preimage_of,
-        referenced_network_ids, referenced_zone_ids, validate_locally,
+        apply_sequentially, check_firewall_policy_respond_traffic, check_network_references,
+        check_writable_fields, check_zone_deletions, check_zone_references, diff_against_preimage,
+        fingerprint_of, mutations_of, preimage_of, referenced_network_ids, referenced_zone_ids,
+        validate_locally,
     },
     client::UnifiClient,
     error::UnifiError,
@@ -1783,6 +1784,10 @@ impl UnifiServer {
             return tool_error(format!("reference check failed: {e}"));
         }
 
+        if let Err(e) = check_firewall_policy_respond_traffic(&preimage, &mutations) {
+            return tool_error(format!("schema constraints failed: {e}"));
+        }
+
         // Referential integrity is checked against the controller's live zone
         // list, not the pre-image. The pre-image records nothing for a create,
         // and it was being searched for a resource with `_id == "_all_"` that
@@ -1942,11 +1947,16 @@ impl UnifiServer {
         // approved into a state where only apply's check stands between it
         // and the controller. An approver's signature should attest to a plan
         // that can actually be applied.
-        let (approval_mutations, _) = match Self::plan_of(&record) {
+        let (approval_mutations, approval_preimage) = match Self::plan_of(&record) {
             Ok(plan) => plan,
             Err(result) => return *result,
         };
         if let Err(e) = check_writable_fields(&approval_mutations) {
+            return tool_error(format!("approval refused: {e}"));
+        }
+        if let Err(e) =
+            check_firewall_policy_respond_traffic(&approval_preimage, &approval_mutations)
+        {
             return tool_error(format!("approval refused: {e}"));
         }
 
@@ -2164,9 +2174,12 @@ impl UnifiServer {
         // or -- with `--state-file` -- survive a restart into a build that
         // tightened one. Staging and `unifi_validate_change_set` already run
         // this check, but neither is mandatory before apply, so the same
-        // refusal has to be enforced here too. Mirrors the `plan_of` error
-        // arm above: nothing has been written yet, so `Failed` is accurate.
-        if let Err(e) = check_writable_fields(&mutations) {
+        // refusal has to be enforced here too, with the respond-traffic check
+        // that needs the pre-image. Mirrors the `plan_of` error arm above:
+        // nothing has been written yet, so `Failed` is accurate.
+        if let Err(e) = check_writable_fields(&mutations)
+            .and_then(|()| check_firewall_policy_respond_traffic(&preimage, &mutations))
+        {
             let mut abandoned = claimed;
             abandoned.state = ChangeSetState::Failed;
             if let Err(error) = self.coordinator.update_change_set(abandoned).await {
@@ -2174,7 +2187,7 @@ impl UnifiServer {
                     change_set_id = %args.change_set_id,
                     field = error.field(),
                     message = error.message(),
-                    "a claimed change set could not be settled after its writable-field \
+                    "a claimed change set could not be settled after its schema \
                      check failed; it will stay Applying"
                 );
             }

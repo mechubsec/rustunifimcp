@@ -224,9 +224,8 @@ pub fn check_writable_fields(mutations: &[StagedMutation]) -> Result<(), UnifiEr
         }
 
         check_dhcp_reservation_fixedip(mutation, resource_kind, object)?;
-        // shortcut: body-only, so an update setting only create_allow_respond: true on a
-        // policy already BLOCK/REJECT passes staging and is refused at apply (then rolled
-        // back); check the effective body against the pre-image if that shows up.
+        // Early hint only; the authoritative check against the pre-image runs at validate
+        // (`check_firewall_policy_respond_traffic`).
         check_firewall_policy_respond(mutation, resource_kind, object)?;
     }
     Ok(())
@@ -281,18 +280,75 @@ fn check_firewall_policy_respond(
     }
     // The controller's own predefined BLOCK policies carry `create_allow_respond: true`
     // (10.5.67), so a re-staged one is left for the controller to judge.
-    // shortcut: `predefined` is read from the staged body, so a body can claim it and
-    // reach apply, as before #164; read it from the pre-image with the check above.
+    // The authoritative check reads `predefined` from the pre-image at validate.
     if object.get("predefined") == Some(&Value::Bool(true)) {
         return Ok(());
     }
-    Err(UnifiError::WriteRefused(format!(
+    Err(respond_traffic_refusal(mutation, action))
+}
+
+/// The refusal shared by the staging-time and validate-time respond-traffic checks.
+fn respond_traffic_refusal(mutation: &StagedMutation, action: &str) -> UnifiError {
+    UnifiError::WriteRefused(format!(
         "staged {} sets action '{action}' without 'create_allow_respond: false'; the \
          controller refuses a BLOCK or REJECT policy that allows respond traffic, and \
          defaults the field to true when it is left out. Stage 'create_allow_respond': \
          false explicitly",
         mutation.preview()
-    )))
+    ))
+}
+
+/// Refuse a `firewall_policy` whose effective state is a BLOCK or REJECT that allows
+/// respond traffic, judged against the live policy.
+///
+/// Authoritative counterpart of the body-only staging check: an update is folded
+/// over the pre-image (cumulatively, like apply), so one that sets only
+/// `create_allow_respond: true` on a BLOCK policy is caught, and `predefined` is
+/// read from the controller's copy, never from a staged body. A create is never
+/// predefined.
+///
+/// # Errors
+///
+/// Returns [`UnifiError::WriteRefused`] naming the mutation.
+pub fn check_firewall_policy_respond_traffic(
+    preimage: &Preimage,
+    mutations: &[StagedMutation],
+) -> Result<(), UnifiError> {
+    // id -> (live policy is predefined, effective policy after the updates so far)
+    let mut live: BTreeMap<&str, (bool, Value)> = BTreeMap::new();
+    for mutation in mutations {
+        let effective = match mutation {
+            StagedMutation::Create { kind, body } if kind == POLICY_KIND => body.clone(),
+            StagedMutation::Update { kind, id, body } if kind == POLICY_KIND => {
+                if !live.contains_key(id.as_str()) {
+                    let Some(resource) = preimage.get_resource(id) else {
+                        continue;
+                    };
+                    let predefined = resource.get("predefined") == Some(&Value::Bool(true));
+                    live.insert(id.as_str(), (predefined, resource));
+                }
+                let (predefined, resource) = live.get_mut(id.as_str()).expect("seeded above");
+                overlay(resource, body);
+                // The controller's own BLOCK policies carry `create_allow_respond: true`.
+                if *predefined {
+                    continue;
+                }
+                resource.clone()
+            }
+            StagedMutation::Delete { kind, id } if kind == POLICY_KIND => {
+                live.remove(id.as_str());
+                continue;
+            }
+            _ => continue,
+        };
+        let Some(action) = effective.get("action").and_then(Value::as_str) else {
+            continue;
+        };
+        if action != "ALLOW" && effective.get("create_allow_respond") != Some(&Value::Bool(false)) {
+            return Err(respond_traffic_refusal(mutation, action));
+        }
+    }
+    Ok(())
 }
 
 /// Validate that all staged mutations are covered by the pre-image.
@@ -454,6 +510,9 @@ pub fn referenced_zone_ids(mutations: &[StagedMutation]) -> Vec<String> {
 
 /// The resource kind whose deletion removes a zone a policy could name.
 const ZONE_KIND: &str = "firewall_zone";
+
+/// The resource kind the controller's respond-traffic rule applies to.
+const POLICY_KIND: &str = "firewall_policy";
 
 /// The zones this change set deletes.
 fn zones_deleted_by(mutations: &[StagedMutation]) -> Vec<&str> {
@@ -756,8 +815,8 @@ pub fn check_network_references(
 #[cfg(test)]
 mod tests {
     use super::{
-        ZoneIndex, check_network_references, check_zone_deletions, check_zone_references,
-        referenced_network_ids, referenced_zone_ids,
+        ZoneIndex, check_firewall_policy_respond_traffic, check_network_references,
+        check_zone_deletions, check_zone_references, referenced_network_ids, referenced_zone_ids,
     };
     use crate::changeset::{Preimage, StagedMutation};
     use serde_json::{Value, json};
@@ -1228,6 +1287,91 @@ mod tests {
             referenced_network_ids(&[named]),
             ["eeeeeeeeeeeeeeeeeeeeeeee"]
         );
+    }
+
+    fn respond_preimage(action: &str, allow_respond: bool, predefined: bool) -> Preimage {
+        Preimage::from_resources(vec![json!({
+            "_id": "pol000000000000000000001",
+            "action": action,
+            "create_allow_respond": allow_respond,
+            "predefined": predefined
+        })])
+    }
+
+    fn update_policy(body: Value) -> StagedMutation {
+        StagedMutation::update("firewall_policy", "pol000000000000000000001", body)
+    }
+
+    #[test]
+    fn respond_true_alone_on_a_live_block_policy_is_refused() {
+        let staged = [update_policy(json!({ "create_allow_respond": true }))];
+        let result = check_firewall_policy_respond_traffic(
+            &respond_preimage("BLOCK", false, false),
+            &staged,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn switching_a_live_allow_policy_to_block_needs_respond_false() {
+        let preimage = respond_preimage("ALLOW", true, false);
+        let bare = [update_policy(json!({ "action": "BLOCK" }))];
+        assert!(check_firewall_policy_respond_traffic(&preimage, &bare).is_err());
+        let explicit = [update_policy(
+            json!({ "action": "BLOCK", "create_allow_respond": false }),
+        )];
+        assert!(check_firewall_policy_respond_traffic(&preimage, &explicit).is_ok());
+    }
+
+    #[test]
+    fn updates_to_one_policy_fold() {
+        let staged = [
+            update_policy(json!({ "action": "BLOCK", "create_allow_respond": false })),
+            update_policy(json!({ "create_allow_respond": true })),
+        ];
+        let result =
+            check_firewall_policy_respond_traffic(&respond_preimage("ALLOW", true, false), &staged);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn a_create_cannot_claim_predefined() {
+        let staged = [StagedMutation::create(
+            "firewall_policy",
+            json!({ "action": "BLOCK", "create_allow_respond": true, "predefined": true }),
+        )];
+        let result =
+            check_firewall_policy_respond_traffic(&Preimage::from_resources(vec![]), &staged);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn an_update_cannot_claim_predefined() {
+        let staged = [update_policy(
+            json!({ "action": "BLOCK", "create_allow_respond": true, "predefined": true }),
+        )];
+        let result =
+            check_firewall_policy_respond_traffic(&respond_preimage("ALLOW", true, false), &staged);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn a_live_predefined_block_policy_may_be_edited() {
+        let staged = [update_policy(json!({ "enabled": false }))];
+        let result =
+            check_firewall_policy_respond_traffic(&respond_preimage("BLOCK", true, true), &staged);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn other_kinds_are_not_checked_for_respond_traffic() {
+        let staged = [StagedMutation::create(
+            "network",
+            json!({ "action": "BLOCK", "create_allow_respond": true }),
+        )];
+        let result =
+            check_firewall_policy_respond_traffic(&Preimage::from_resources(vec![]), &staged);
+        assert!(result.is_ok());
     }
 }
 
