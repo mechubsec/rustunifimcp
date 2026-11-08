@@ -228,7 +228,7 @@ pub fn check_writable_fields(mutations: &[StagedMutation]) -> Result<(), UnifiEr
 
         check_dhcp_reservation_fixedip(mutation, resource_kind, object)?;
         // Early hint only; the authoritative check against the pre-image runs at validate
-        // (`check_firewall_policy_respond_traffic`).
+        // (`check_firewall_policy_against_live`).
         check_firewall_policy_respond(mutation, resource_kind, object)?;
     }
     Ok(())
@@ -301,6 +301,15 @@ fn respond_traffic_refusal(mutation: &StagedMutation, action: &str) -> UnifiErro
     ))
 }
 
+/// The refusal for turning on flow reporting on a policy the controller says cannot report flows.
+fn report_flow_refusal(mutation: &StagedMutation) -> UnifiError {
+    UnifiError::WriteRefused(format!(
+        "staged {} sets 'report_flow: true' on a policy whose live copy has \
+         'report_flow_supported: false'; the controller cannot report flows for it",
+        mutation.preview()
+    ))
+}
+
 /// Refuse a `firewall_policy` whose effective state is a BLOCK or REJECT that allows
 /// respond traffic, judged against the live policy.
 ///
@@ -310,15 +319,21 @@ fn respond_traffic_refusal(mutation: &StagedMutation, action: &str) -> UnifiErro
 /// read from the controller's copy, never from a staged body. A create is never
 /// predefined.
 ///
+/// It also refuses an update setting `report_flow: true` on a policy whose live copy
+/// has `report_flow_supported: false` (UniFi Network 11.0). That capability, too, is
+/// read only from the pre-image, and is checked for predefined policies, which are
+/// the only ones that lack it.
+///
 /// # Errors
 ///
 /// Returns [`UnifiError::WriteRefused`] naming the mutation.
-pub fn check_firewall_policy_respond_traffic(
+pub fn check_firewall_policy_against_live(
     preimage: &Preimage,
     mutations: &[StagedMutation],
 ) -> Result<(), UnifiError> {
-    // id -> (live policy is predefined, effective policy after the updates so far)
-    let mut live: BTreeMap<&str, (bool, Value)> = BTreeMap::new();
+    // id -> (live policy is predefined, live policy cannot report flows,
+    //        effective policy after the updates so far)
+    let mut live: BTreeMap<&str, (bool, bool, Value)> = BTreeMap::new();
     for mutation in mutations {
         let effective = match mutation {
             StagedMutation::Create { kind, body } if kind == POLICY_KIND => body.clone(),
@@ -328,9 +343,15 @@ pub fn check_firewall_policy_respond_traffic(
                         continue;
                     };
                     let predefined = resource.get("predefined") == Some(&Value::Bool(true));
-                    live.insert(id.as_str(), (predefined, resource));
+                    let no_flows =
+                        resource.get("report_flow_supported") == Some(&Value::Bool(false));
+                    live.insert(id.as_str(), (predefined, no_flows, resource));
                 }
-                let (predefined, resource) = live.get_mut(id.as_str()).expect("seeded above");
+                let (predefined, no_flows, resource) =
+                    live.get_mut(id.as_str()).expect("seeded above");
+                if *no_flows && body.get("report_flow") == Some(&Value::Bool(true)) {
+                    return Err(report_flow_refusal(mutation));
+                }
                 overlay(resource, body);
                 // The controller's own BLOCK policies carry `create_allow_respond: true`.
                 if *predefined {
@@ -818,7 +839,7 @@ pub fn check_network_references(
 #[cfg(test)]
 mod tests {
     use super::{
-        ZoneIndex, check_firewall_policy_respond_traffic, check_network_references,
+        ZoneIndex, check_firewall_policy_against_live, check_network_references,
         check_zone_deletions, check_zone_references, referenced_network_ids, referenced_zone_ids,
     };
     use crate::changeset::{Preimage, StagedMutation};
@@ -1308,10 +1329,8 @@ mod tests {
     #[test]
     fn respond_true_alone_on_a_live_block_policy_is_refused() {
         let staged = [update_policy(json!({ "create_allow_respond": true }))];
-        let result = check_firewall_policy_respond_traffic(
-            &respond_preimage("BLOCK", false, false),
-            &staged,
-        );
+        let result =
+            check_firewall_policy_against_live(&respond_preimage("BLOCK", false, false), &staged);
         assert!(result.is_err());
     }
 
@@ -1319,11 +1338,11 @@ mod tests {
     fn switching_a_live_allow_policy_to_block_needs_respond_false() {
         let preimage = respond_preimage("ALLOW", true, false);
         let bare = [update_policy(json!({ "action": "BLOCK" }))];
-        assert!(check_firewall_policy_respond_traffic(&preimage, &bare).is_err());
+        assert!(check_firewall_policy_against_live(&preimage, &bare).is_err());
         let explicit = [update_policy(
             json!({ "action": "BLOCK", "create_allow_respond": false }),
         )];
-        assert!(check_firewall_policy_respond_traffic(&preimage, &explicit).is_ok());
+        assert!(check_firewall_policy_against_live(&preimage, &explicit).is_ok());
     }
 
     #[test]
@@ -1333,7 +1352,7 @@ mod tests {
             update_policy(json!({ "create_allow_respond": true })),
         ];
         let result =
-            check_firewall_policy_respond_traffic(&respond_preimage("ALLOW", true, false), &staged);
+            check_firewall_policy_against_live(&respond_preimage("ALLOW", true, false), &staged);
         assert!(result.is_err());
     }
 
@@ -1343,8 +1362,7 @@ mod tests {
             "firewall_policy",
             json!({ "action": "BLOCK", "create_allow_respond": true, "predefined": true }),
         )];
-        let result =
-            check_firewall_policy_respond_traffic(&Preimage::from_resources(vec![]), &staged);
+        let result = check_firewall_policy_against_live(&Preimage::from_resources(vec![]), &staged);
         assert!(result.is_err());
     }
 
@@ -1354,7 +1372,7 @@ mod tests {
             json!({ "action": "BLOCK", "create_allow_respond": true, "predefined": true }),
         )];
         let result =
-            check_firewall_policy_respond_traffic(&respond_preimage("ALLOW", true, false), &staged);
+            check_firewall_policy_against_live(&respond_preimage("ALLOW", true, false), &staged);
         assert!(result.is_err());
     }
 
@@ -1362,7 +1380,7 @@ mod tests {
     fn a_live_predefined_block_policy_may_be_edited() {
         let staged = [update_policy(json!({ "enabled": false }))];
         let result =
-            check_firewall_policy_respond_traffic(&respond_preimage("BLOCK", true, true), &staged);
+            check_firewall_policy_against_live(&respond_preimage("BLOCK", true, true), &staged);
         assert!(result.is_ok());
     }
 
@@ -1372,9 +1390,45 @@ mod tests {
             "network",
             json!({ "action": "BLOCK", "create_allow_respond": true }),
         )];
-        let result =
-            check_firewall_policy_respond_traffic(&Preimage::from_resources(vec![]), &staged);
+        let result = check_firewall_policy_against_live(&Preimage::from_resources(vec![]), &staged);
         assert!(result.is_ok());
+    }
+
+    fn flow_preimage(supported: bool) -> Preimage {
+        Preimage::from_resources(vec![json!({
+            "_id": "pol000000000000000000001",
+            "action": "ALLOW",
+            "predefined": true,
+            "report_flow": false,
+            "report_flow_supported": supported
+        })])
+    }
+
+    #[test]
+    fn report_flow_on_a_policy_that_cannot_report_flows_is_refused() {
+        let staged = [update_policy(json!({ "report_flow": true }))];
+        let error = check_firewall_policy_against_live(&flow_preimage(false), &staged)
+            .expect_err("the live policy cannot report flows");
+        assert!(
+            error.to_string().contains("report_flow_supported"),
+            "{error}"
+        );
+        let off = [update_policy(json!({ "report_flow": false }))];
+        assert!(check_firewall_policy_against_live(&flow_preimage(false), &off).is_ok());
+    }
+
+    #[test]
+    fn report_flow_on_a_policy_that_can_report_flows_passes() {
+        let staged = [update_policy(json!({ "report_flow": true }))];
+        assert!(check_firewall_policy_against_live(&flow_preimage(true), &staged).is_ok());
+    }
+
+    #[test]
+    fn a_staged_body_cannot_claim_flow_support() {
+        let staged = [update_policy(
+            json!({ "report_flow_supported": true, "report_flow": true }),
+        )];
+        assert!(check_firewall_policy_against_live(&flow_preimage(false), &staged).is_err());
     }
 }
 

@@ -23,7 +23,7 @@ use rmcp::{
 use rustunifimcp_core::{
     changeset::{
         Preimage, StagedMutation, State, UnifiTransaction, ZoneIndex, actions_for,
-        apply_sequentially, check_firewall_policy_respond_traffic, check_network_references,
+        apply_sequentially, check_firewall_policy_against_live, check_network_references,
         check_writable_fields, check_zone_deletions, check_zone_references, diff_against_preimage,
         fingerprint_of, mutations_of, preimage_of, referenced_network_ids, referenced_zone_ids,
         validate_locally,
@@ -1784,7 +1784,7 @@ impl UnifiServer {
             return tool_error(format!("reference check failed: {e}"));
         }
 
-        if let Err(e) = check_firewall_policy_respond_traffic(&preimage, &mutations) {
+        if let Err(e) = check_firewall_policy_against_live(&preimage, &mutations) {
             return tool_error(format!("schema constraints failed: {e}"));
         }
 
@@ -1954,8 +1954,7 @@ impl UnifiServer {
         if let Err(e) = check_writable_fields(&approval_mutations) {
             return tool_error(format!("approval refused: {e}"));
         }
-        if let Err(e) =
-            check_firewall_policy_respond_traffic(&approval_preimage, &approval_mutations)
+        if let Err(e) = check_firewall_policy_against_live(&approval_preimage, &approval_mutations)
         {
             return tool_error(format!("approval refused: {e}"));
         }
@@ -2178,7 +2177,7 @@ impl UnifiServer {
         // that needs the pre-image. Mirrors the `plan_of` error arm above:
         // nothing has been written yet, so `Failed` is accurate.
         if let Err(e) = check_writable_fields(&mutations)
-            .and_then(|()| check_firewall_policy_respond_traffic(&preimage, &mutations))
+            .and_then(|()| check_firewall_policy_against_live(&preimage, &mutations))
         {
             let mut abandoned = claimed;
             abandoned.state = ChangeSetState::Failed;

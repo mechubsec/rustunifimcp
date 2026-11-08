@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Validation, approval and apply refuse an update setting `report_flow: true` on a
+  firewall policy whose live copy has `report_flow_supported: false`, instead of
+  leaving the controller to reject or ignore it.
+
 ## [0.6.12] - 2026-11-08
 
 ### Fixed
