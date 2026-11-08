@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- A firewall zone delete must be the last mutation in its change set, so a set holds
+  at most one. Rollback cannot recreate a deleted zone, and a delete with nothing
+  after it never needs rolling back. Validation, approval and apply refuse any other
+  order.
+
 ### Fixed
 
 - Validation, approval and apply refuse an update setting `report_flow: true` on a

@@ -583,13 +583,16 @@ fn overlay(base: &mut Value, fragment: &Value) {
 ///
 /// Apply is a sequence of independent REST calls in staging order, with no
 /// candidate and no commit, so the check has to follow that order rather than
-/// compare start to end. Two orderings fail, and they fail differently:
+/// compare start to end. Two things are refused:
 ///
 /// - A zone deleted while something the set writes still references it. The
 ///   controller refuses to remove a zone in use, and by then earlier writes
 ///   have already landed.
-/// - A policy written after the set has deleted the zone it names. That write
-///   fails on a zone that no longer exists.
+/// - A zone delete that is not the set's last mutation. Rollback cannot undo
+///   one: the controller refuses a zone recreated from its pre-image, and a
+///   new zone would not carry the old `_id`. Rollback only undoes mutations a
+///   later failure strands, so a zone delete with nothing after it never needs
+///   undoing. This also limits a set to one zone delete.
 ///
 /// The state the check walks starts from the pre-image for every resource the
 /// set updates or deletes, because a zone delete is refused by what is *live*
@@ -637,12 +640,10 @@ pub fn check_zone_deletions(
     // Resources this set creates. They have no id until apply, so they cannot
     // be addressed by a later mutation and never need folding.
     let mut created: Vec<(String, Value)> = Vec::new();
-    let mut deleted: BTreeSet<&str> = BTreeSet::new();
 
-    for mutation in mutations {
+    for (position, mutation) in mutations.iter().enumerate() {
         match mutation {
             StagedMutation::Create { body, .. } => {
-                refuse_reference_to_deleted(&mutation.preview(), body, &deleted)?;
                 created.push((mutation.preview(), body.clone()));
             }
             StagedMutation::Update { id, body, .. } => {
@@ -651,8 +652,6 @@ pub fn check_zone_deletions(
                     .or_insert_with(|| (mutation.preview(), Value::Object(serde_json::Map::new())));
                 overlay(&mut entry.1, body);
                 entry.0 = mutation.preview();
-                let (preview, resource) = (entry.0.clone(), entry.1.clone());
-                refuse_reference_to_deleted(&preview, &resource, &deleted)?;
             }
             StagedMutation::Delete { kind, id } if kind == ZONE_KIND => {
                 for (preview, resource) in live.values().chain(created.iter()) {
@@ -666,7 +665,14 @@ pub fn check_zone_deletions(
                         }
                     }
                 }
-                deleted.insert(id.as_str());
+                if position + 1 < mutations.len() {
+                    return Err(UnifiError::WriteRefused(format!(
+                        "staged delete firewall_zone {id} must be the last mutation in \
+                         the change set: rollback cannot recreate a zone, so nothing may \
+                         follow its delete; stage one zone delete per change set, after \
+                         everything else"
+                    )));
+                }
             }
             StagedMutation::Delete { id, .. } => {
                 live.remove(id);
@@ -675,23 +681,6 @@ pub fn check_zone_deletions(
         }
     }
 
-    Ok(())
-}
-
-/// Refuse a write naming a zone an earlier mutation in the set removed.
-fn refuse_reference_to_deleted(
-    preview: &str,
-    resource: &Value,
-    deleted: &BTreeSet<&str>,
-) -> Result<(), UnifiError> {
-    for (field, zone_id) in zones_named_by(resource) {
-        if deleted.contains(zone_id) {
-            return Err(UnifiError::ReferenceNotFound(format!(
-                "staged {preview} names {field} '{zone_id}', which an earlier \
-                 mutation in this change set deletes"
-            )));
-        }
-    }
     Ok(())
 }
 
@@ -967,20 +956,40 @@ mod tests {
         }]}))
     }
 
-    /// Apply runs staged mutations in order against live state, so a zone the
-    /// same change set deletes is gone before a later policy write lands. The
-    /// live list still has it, which is why the zone index alone is not enough.
+    /// Rollback cannot recreate a zone, so a zone delete must be the last
+    /// mutation: then no later failure can leave it needing undoing. Anything
+    /// after it is refused, whether or not it names the zone, and so is a
+    /// second zone delete.
     #[test]
-    fn a_policy_naming_a_zone_the_same_set_deletes_is_refused() {
-        let staged = vec![
+    fn a_zone_delete_must_be_the_last_mutation() {
+        let preimage = preimage_with_live_policy();
+        let unrelated = StagedMutation::update("network", "abc123", json!({ "name": "x" }));
+        for staged in [
+            vec![
+                StagedMutation::delete("firewall_zone", "cccccccccccccccccccccccc"),
+                policy_between("aaaaaaaaaaaaaaaaaaaaaaaa", "cccccccccccccccccccccccc"),
+            ],
+            vec![
+                StagedMutation::delete("firewall_zone", "cccccccccccccccccccccccc"),
+                unrelated.clone(),
+            ],
+            vec![
+                StagedMutation::delete("firewall_zone", "cccccccccccccccccccccccc"),
+                StagedMutation::delete("firewall_zone", "aaaaaaaaaaaaaaaaaaaaaaaa"),
+            ],
+        ] {
+            let error = check_zone_deletions(&preimage, &staged)
+                .expect_err("something follows the zone delete");
+            let rendered = error.to_string();
+            assert!(rendered.contains("must be the last mutation"), "{rendered}");
+            assert!(rendered.contains("cccccccccccccccccccccccc"), "{rendered}");
+        }
+
+        let delete_last = vec![
+            unrelated,
             StagedMutation::delete("firewall_zone", "cccccccccccccccccccccccc"),
-            policy_between("aaaaaaaaaaaaaaaaaaaaaaaa", "cccccccccccccccccccccccc"),
         ];
-        let error = check_zone_deletions(&preimage_with_live_policy(), &staged)
-            .expect_err("the destination zone is being deleted");
-        let rendered = error.to_string();
-        assert!(rendered.contains("deletes"), "{rendered}");
-        assert!(rendered.contains("cccccccccccccccccccccccc"), "{rendered}");
+        assert!(check_zone_deletions(&preimage, &delete_last).is_ok());
     }
 
     /// #143: a network names its zone at the top level, and every zone
