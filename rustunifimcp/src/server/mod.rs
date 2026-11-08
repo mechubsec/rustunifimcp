@@ -23,7 +23,7 @@ use rmcp::{
 use rustunifimcp_core::{
     changeset::{
         Preimage, StagedMutation, State, UnifiTransaction, ZoneIndex, actions_for,
-        apply_sequentially, check_firewall_policy_respond_traffic, check_network_references,
+        apply_sequentially, check_firewall_policy_against_live, check_network_references,
         check_writable_fields, check_zone_deletions, check_zone_references, diff_against_preimage,
         fingerprint_of, mutations_of, preimage_of, referenced_network_ids, referenced_zone_ids,
         validate_locally,
@@ -1784,7 +1784,7 @@ impl UnifiServer {
             return tool_error(format!("reference check failed: {e}"));
         }
 
-        if let Err(e) = check_firewall_policy_respond_traffic(&preimage, &mutations) {
+        if let Err(e) = check_firewall_policy_against_live(&preimage, &mutations) {
             return tool_error(format!("schema constraints failed: {e}"));
         }
 
@@ -1802,19 +1802,18 @@ impl UnifiServer {
                 Err(result) => return *result,
             };
 
-            let zone_args = read::ListResourcesArgs {
-                controller: args.controller.clone(),
-                kind: ResourceKind::FirewallZone,
-                site: None,
-                limit: None,
-                offset: None,
-            };
-
-            let raw = match read::list_resources(&client, &zone_args).await {
+            let raw = match read::list_all_resources(
+                &client,
+                &args.controller,
+                ResourceKind::FirewallZone,
+            )
+            .await
+            {
                 Ok(raw) => raw,
                 Err(e) => {
                     return tool_error(format!(
-                        "could not read the firewall zone list from controller '{}', so zone                          references cannot be checked: {e}",
+                        "could not read the firewall zone list from controller '{}', so zone \
+                         references cannot be checked: {e}",
                         args.controller
                     ));
                 }
@@ -1824,7 +1823,8 @@ impl UnifiServer {
                 Ok(zones) => zones,
                 Err(e) => {
                     return tool_error(format!(
-                        "could not read the firewall zone list from controller '{}', so zone                          references cannot be checked: {e}",
+                        "could not read the firewall zone list from controller '{}', so zone \
+                         references cannot be checked: {e}",
                         args.controller
                     ));
                 }
@@ -1844,26 +1844,19 @@ impl UnifiServer {
                 Err(result) => return *result,
             };
 
-            // shortcut: reads the first page (200) only, like the zone check above;
-            // fetch every page if a site ever holds more networks than that.
-            let network_args = read::ListResourcesArgs {
-                controller: args.controller.clone(),
-                kind: ResourceKind::Network,
-                site: None,
-                limit: None,
-                offset: None,
-            };
-
-            let raw = match read::list_resources(&client, &network_args).await {
-                Ok(raw) => raw,
-                Err(e) => {
-                    return tool_error(format!(
-                        "could not read the network list from controller '{}', so network_id \
+            let raw =
+                match read::list_all_resources(&client, &args.controller, ResourceKind::Network)
+                    .await
+                {
+                    Ok(raw) => raw,
+                    Err(e) => {
+                        return tool_error(format!(
+                            "could not read the network list from controller '{}', so network_id \
                          references cannot be checked: {e}",
-                        args.controller
-                    ));
-                }
-            };
+                            args.controller
+                        ));
+                    }
+                };
 
             if let Err(e) = check_network_references(&raw, &mutations) {
                 return tool_error(format!("reference check failed: {e}"));
@@ -1954,8 +1947,7 @@ impl UnifiServer {
         if let Err(e) = check_writable_fields(&approval_mutations) {
             return tool_error(format!("approval refused: {e}"));
         }
-        if let Err(e) =
-            check_firewall_policy_respond_traffic(&approval_preimage, &approval_mutations)
+        if let Err(e) = check_firewall_policy_against_live(&approval_preimage, &approval_mutations)
         {
             return tool_error(format!("approval refused: {e}"));
         }
@@ -2178,7 +2170,7 @@ impl UnifiServer {
         // that needs the pre-image. Mirrors the `plan_of` error arm above:
         // nothing has been written yet, so `Failed` is accurate.
         if let Err(e) = check_writable_fields(&mutations)
-            .and_then(|()| check_firewall_policy_respond_traffic(&preimage, &mutations))
+            .and_then(|()| check_firewall_policy_against_live(&preimage, &mutations))
         {
             let mut abandoned = claimed;
             abandoned.state = ChangeSetState::Failed;

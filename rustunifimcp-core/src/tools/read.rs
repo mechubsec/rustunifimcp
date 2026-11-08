@@ -249,6 +249,57 @@ pub async fn list_resources(
     Ok(crate::redact::project_resource_list(args.kind, &paged))
 }
 
+/// Every resource of a private-surface `kind` on the controller's default site.
+///
+/// For a check that must see the whole collection, such as one refusing a staged
+/// `network_id` or zone id the controller does not have: [`list_resources`] returns
+/// one page of 200 by default, and an id past it would be refused as unknown. The
+/// private surfaces return the whole collection and are sliced locally, so a single
+/// request at the largest page size reads it all, from one snapshot.
+///
+/// # Errors
+///
+/// Returns the request's error, or [`UnifiError::Malformed`] for a kind the
+/// Integration API pages upstream, or for a list that fills the page and so may not
+/// be whole.
+pub async fn list_all_resources(
+    client: &UnifiClient,
+    controller: &str,
+    kind: ResourceKind,
+) -> Result<serde_json::Value, UnifiError> {
+    if kind.surface() == ApiSurface::Supported {
+        return Err(UnifiError::Malformed(format!(
+            "{kind:?} is paged upstream; list_all_resources reads only the private surfaces"
+        )));
+    }
+    let limit = mecmcp_openapi::PageLimits::default().max_size;
+    let args = ListResourcesArgs {
+        controller: controller.to_owned(),
+        kind,
+        site: None,
+        limit: Some(limit),
+        offset: None,
+    };
+    whole_list(kind, list_resources(client, &args).await?, limit)
+}
+
+/// `list` if it is the whole collection; a list that fills the page may not be.
+fn whole_list(
+    kind: ResourceKind,
+    list: serde_json::Value,
+    limit: u32,
+) -> Result<serde_json::Value, UnifiError> {
+    match list.as_array().map(Vec::len) {
+        Some(len) if len < limit as usize => Ok(list),
+        Some(_) => Err(UnifiError::Malformed(format!(
+            "the {kind:?} list holds {limit} or more items; refusing to check against part of it"
+        ))),
+        None => Err(UnifiError::Malformed(format!(
+            "{kind:?} list is not an array"
+        ))),
+    }
+}
+
 /// Applies `offset`/`limit` locally on the surfaces that discard them.
 ///
 /// `offset` and `limit` are sent as query parameters, but only the Integration
@@ -1102,6 +1153,21 @@ mod tests {
             let end = start.saturating_add(limit as usize).min(self.items.len());
             Ok(self.items[start..end].to_vec())
         }
+    }
+
+    /// The validate-time network and zone checks must read the whole list, and say so
+    /// when they cannot rather than check against part of it.
+    #[test]
+    fn whole_list_accepts_only_a_list_short_of_the_page_limit() {
+        use crate::model::ResourceKind;
+        let list = |count: usize| serde_json::json!(vec![serde_json::json!({}); count]);
+        assert_eq!(
+            super::whole_list(ResourceKind::Network, list(2), 3).expect("whole"),
+            list(2)
+        );
+        let error = super::whole_list(ResourceKind::Network, list(3), 3).expect_err("may be cut");
+        assert!(error.to_string().contains("3 or more"), "{error}");
+        assert!(super::whole_list(ResourceKind::Network, serde_json::json!({}), 3).is_err());
     }
 
     /// The reported defect: `unifi_search` matched only the first page of a
