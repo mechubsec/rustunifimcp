@@ -44,6 +44,8 @@
     "icmp_typename": "ANY",
     "icmp_v6_typename": "ANY",
     "match_ip_sec": false,
-    "match_opposite_protocol": false
+    "match_opposite_protocol": false,
+    "report_flow": true,
+    "report_flow_supported": true
   }
 ]

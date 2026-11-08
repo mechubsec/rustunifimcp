@@ -20,7 +20,8 @@ enforces that the synthetic set contains no sensitive data, and
 (`000000000000000000000202`, `predefined: true`, `create_allow_respond: true`).
 Real controllers ship such policies, and the respond-traffic staging check must
 not refuse them; CI has no recorded set, so without this entry nothing would
-catch a regression there.
+catch a regression there. It also carries UniFi Network 11.0's `report_flow`
+and `report_flow_supported`, which every 11.0 policy has.
 
 ## Recorded Fixtures
 
@@ -115,10 +116,10 @@ report success.
    manifest must be recaptured, or given one by hand. The matrix test
    (`tests/version_matrix.rs`) will fail if the matrix and fixtures disagree.
 
-5. **Remove the `#[ignore]` attribute** — once at least two controller versions
-   are recorded, remove the `#[ignore]` attribute from
-   `at_least_two_controller_versions_are_recorded()` in
-   `tests/version_matrix.rs`. This is Phase 1's exit criterion.
+5. **Keep at least two versions** — Phase 1's exit criterion (10.5.67 and
+   11.0.97). `at_least_two_controller_versions_are_recorded()` in
+   `tests/version_matrix.rs` fails on a checkout holding exactly one recording,
+   and skips on one holding none, as CI does.
 
 6. **Commit only after the gate passes** — a passing gate is not proof the
    fixtures are safe (the denylist could be incomplete), but a failing gate is

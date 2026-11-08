@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Staging a firewall policy read from a UniFi Network 11.0 controller no longer fails
+  on `report_flow`, which every 11.0 policy carries. `report_flow_supported` is
+  controller-computed and, like `hits`, must be dropped from a restaged body.
+
 ## [0.6.11] - 2026-11-06
 
 ### Fixed

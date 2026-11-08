@@ -71,6 +71,9 @@ pub fn endpoint_availability(version: &str, kind: ResourceKind) -> Availability 
         // Version 10.5.67: All private endpoints present (zero .absent markers)
         (10, 5) => Availability::Present,
 
+        // Version 11.0.97: All private endpoints present (zero .absent markers)
+        (11, 0) => Availability::Present,
+
         // Unrecorded version: caller may attempt the request but must attribute
         // failures as possible drift rather than a broken tool
         _ => Availability::Unrecorded,
