@@ -40,9 +40,11 @@ use super::preimage::{Preimage, StagedMutation};
 ///   supported authoring loop is "read a working policy, change one field,
 ///   stage it back". The extra names below are the ones every policy a real
 ///   controller returns carries (`create_allow_respond`, `icmp_typename`,
-///   `icmp_v6_typename`, `match_ip_sec`, `match_opposite_protocol`, and the
-///   optional `description`). Server-managed fields (`_id`, `hits`,
-///   `last_hit`, `origin_id`, `origin_type`) are deliberately not listed.
+///   `icmp_v6_typename`, `match_ip_sec`, `match_opposite_protocol`,
+///   `report_flow` from UniFi Network 11.0, and the optional `description`).
+///   Server-managed fields (`_id`, `hits`, `last_hit`, `origin_id`,
+///   `origin_type`, and 11.0's `report_flow_supported`) are deliberately not
+///   listed.
 ///
 ///   `predefined` stays in this list for the same reason, not by omission:
 ///   it is a named field on [`crate::model::firewall::FirewallPolicy`] (not
@@ -121,6 +123,7 @@ pub(crate) fn writable_fields(kind: ResourceKind) -> Option<&'static [&'static s
             "icmp_v6_typename",
             "match_ip_sec",
             "match_opposite_protocol",
+            "report_flow",
         ]),
         ResourceKind::TrafficRoute => Some(&["name"]),
         ResourceKind::PortForward => Some(&[
@@ -1666,6 +1669,7 @@ mod writable_fields_tests {
                 "last_hit",
                 "origin_id",
                 "origin_type",
+                "report_flow_supported",
                 "x_shared_secret",
             ] {
                 body.as_object_mut().expect("object").remove(field);

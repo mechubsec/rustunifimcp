@@ -20,7 +20,8 @@ enforces that the synthetic set contains no sensitive data, and
 (`000000000000000000000202`, `predefined: true`, `create_allow_respond: true`).
 Real controllers ship such policies, and the respond-traffic staging check must
 not refuse them; CI has no recorded set, so without this entry nothing would
-catch a regression there.
+catch a regression there. It also carries UniFi Network 11.0's `report_flow`
+and `report_flow_supported`, which every 11.0 policy has.
 
 ## Recorded Fixtures
 
