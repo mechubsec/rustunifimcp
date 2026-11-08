@@ -1778,10 +1778,11 @@ impl UnifiServer {
         }
 
         // A zone this set deletes must not be left referenced by anything else
-        // in the set. Checked first because it needs no controller round trip:
-        // it compares the set against itself and against the pre-image.
+        // in the set, and must be its last mutation. Checked first because it
+        // needs no controller round trip: it compares the set against itself
+        // and against the pre-image.
         if let Err(e) = check_zone_deletions(&preimage, &mutations) {
-            return tool_error(format!("reference check failed: {e}"));
+            return tool_error(format!("zone deletion check failed: {e}"));
         }
 
         if let Err(e) = check_firewall_policy_against_live(&preimage, &mutations) {
@@ -1948,6 +1949,7 @@ impl UnifiServer {
             return tool_error(format!("approval refused: {e}"));
         }
         if let Err(e) = check_firewall_policy_against_live(&approval_preimage, &approval_mutations)
+            .and_then(|()| check_zone_deletions(&approval_preimage, &approval_mutations))
         {
             return tool_error(format!("approval refused: {e}"));
         }
@@ -2166,11 +2168,12 @@ impl UnifiServer {
         // or -- with `--state-file` -- survive a restart into a build that
         // tightened one. Staging and `unifi_validate_change_set` already run
         // this check, but neither is mandatory before apply, so the same
-        // refusal has to be enforced here too, with the respond-traffic check
-        // that needs the pre-image. Mirrors the `plan_of` error arm above:
+        // refusal has to be enforced here too, with the policy and zone-delete
+        // checks that need the pre-image. Mirrors the `plan_of` error arm above:
         // nothing has been written yet, so `Failed` is accurate.
         if let Err(e) = check_writable_fields(&mutations)
             .and_then(|()| check_firewall_policy_against_live(&preimage, &mutations))
+            .and_then(|()| check_zone_deletions(&preimage, &mutations))
         {
             let mut abandoned = claimed;
             abandoned.state = ChangeSetState::Failed;
@@ -3799,6 +3802,95 @@ mod tests {
         .await;
         let error = refused.expect_err("respond traffic on a BLOCK policy is refused");
         assert!(error.contains("create_allow_respond"), "{error}");
+
+        let settled = coordinator
+            .change_set(&id, "home")
+            .await
+            .expect("the record must still be readable");
+        assert_eq!(settled.state, ChangeSetState::Failed);
+    }
+
+    /// A record deleting a zone before another write: rollback could not
+    /// recreate the zone if that write failed.
+    fn zone_delete_not_last_record(owner: &str, controller: &str, ttl: u64) -> ChangeSetRecord {
+        let staged = vec![
+            StagedMutation::delete("firewall_zone", "000000000000000000000401"),
+            StagedMutation::update(
+                "network",
+                "000000000000000000000402",
+                serde_json::json!({ "name": "renamed" }),
+            ),
+        ];
+        let preimage = Preimage::from_resources(vec![
+            serde_json::json!({ "_id": "000000000000000000000401", "name": "zone" }),
+            serde_json::json!({ "_id": "000000000000000000000402", "name": "network" }),
+        ]);
+        planned_record_with(owner, controller, ttl, &staged, &preimage)
+    }
+
+    /// Validation is optional, so approval refuses the ordering itself.
+    #[tokio::test]
+    async fn approve_refuses_a_zone_delete_that_is_not_last() {
+        let coordinator = coordinator_at(None);
+        let record = zone_delete_not_last_record("alice", "home", 300);
+        let id = record.id.clone();
+        coordinator.insert_change_set(record).await.expect("insert");
+        let server = UnifiServer::new(
+            controller_registry(),
+            true,
+            coordinator,
+            None,
+            mecmcp_audit::DirectCommitPolicy::new(false),
+        )
+        .expect("server");
+
+        let refused = call(
+            server,
+            "unifi_approve_change_set",
+            serde_json::json!({"controller": "home", "change_set_id": id}),
+        )
+        .await;
+        let error = refused.expect_err("a write follows the zone delete");
+        assert!(error.contains("must be the last mutation"), "{error}");
+    }
+
+    /// An approved plan with the ordering is refused at apply before the
+    /// (unreachable) controller is contacted, and settles to `Failed`.
+    #[tokio::test]
+    async fn apply_refuses_a_seeded_zone_delete_that_is_not_last() {
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
+        let coordinator = coordinator_at(None);
+        let record = zone_delete_not_last_record("alice", "home", 300);
+        let (id, digest) = (record.id.clone(), record.digest.clone());
+        coordinator.insert_change_set(record).await.expect("insert");
+        coordinator
+            .approve_change_set(
+                id.clone(),
+                "home".to_owned(),
+                &human_approver("bob"),
+                digest,
+            )
+            .await
+            .expect("a second principal approves");
+
+        let server = UnifiServer::new(
+            controller_registry(),
+            true,
+            coordinator.clone(),
+            None,
+            mecmcp_audit::DirectCommitPolicy::new(false),
+        )
+        .expect("server");
+
+        let refused = call(
+            server,
+            "unifi_apply_change_set",
+            serde_json::json!({"controller": "home", "change_set_id": id}),
+        )
+        .await;
+        let error = refused.expect_err("a write follows the zone delete");
+        assert!(error.contains("must be the last mutation"), "{error}");
 
         let settled = coordinator
             .change_set(&id, "home")
