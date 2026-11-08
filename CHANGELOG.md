@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.12] - 2026-11-08
+
 ### Fixed
 
 - Staging a firewall policy read from a UniFi Network 11.0 controller no longer fails
