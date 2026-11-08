@@ -1802,19 +1802,18 @@ impl UnifiServer {
                 Err(result) => return *result,
             };
 
-            let zone_args = read::ListResourcesArgs {
-                controller: args.controller.clone(),
-                kind: ResourceKind::FirewallZone,
-                site: None,
-                limit: None,
-                offset: None,
-            };
-
-            let raw = match read::list_resources(&client, &zone_args).await {
+            let raw = match read::list_all_resources(
+                &client,
+                &args.controller,
+                ResourceKind::FirewallZone,
+            )
+            .await
+            {
                 Ok(raw) => raw,
                 Err(e) => {
                     return tool_error(format!(
-                        "could not read the firewall zone list from controller '{}', so zone                          references cannot be checked: {e}",
+                        "could not read the firewall zone list from controller '{}', so zone \
+                         references cannot be checked: {e}",
                         args.controller
                     ));
                 }
@@ -1824,7 +1823,8 @@ impl UnifiServer {
                 Ok(zones) => zones,
                 Err(e) => {
                     return tool_error(format!(
-                        "could not read the firewall zone list from controller '{}', so zone                          references cannot be checked: {e}",
+                        "could not read the firewall zone list from controller '{}', so zone \
+                         references cannot be checked: {e}",
                         args.controller
                     ));
                 }
@@ -1844,26 +1844,19 @@ impl UnifiServer {
                 Err(result) => return *result,
             };
 
-            // shortcut: reads the first page (200) only, like the zone check above;
-            // fetch every page if a site ever holds more networks than that.
-            let network_args = read::ListResourcesArgs {
-                controller: args.controller.clone(),
-                kind: ResourceKind::Network,
-                site: None,
-                limit: None,
-                offset: None,
-            };
-
-            let raw = match read::list_resources(&client, &network_args).await {
-                Ok(raw) => raw,
-                Err(e) => {
-                    return tool_error(format!(
-                        "could not read the network list from controller '{}', so network_id \
+            let raw =
+                match read::list_all_resources(&client, &args.controller, ResourceKind::Network)
+                    .await
+                {
+                    Ok(raw) => raw,
+                    Err(e) => {
+                        return tool_error(format!(
+                            "could not read the network list from controller '{}', so network_id \
                          references cannot be checked: {e}",
-                        args.controller
-                    ));
-                }
-            };
+                            args.controller
+                        ));
+                    }
+                };
 
             if let Err(e) = check_network_references(&raw, &mutations) {
                 return tool_error(format!("reference check failed: {e}"));

@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Validation, approval and apply refuse an update setting `report_flow: true` on a
   firewall policy whose live copy has `report_flow_supported: false`, instead of
   leaving the controller to reject or ignore it.
+- Validation checks a staged `network_id` or zone id against the controller's whole
+  network or zone list, not its first 200 entries, so an id past them is no longer
+  refused as unknown.
 
 ## [0.6.12] - 2026-11-08
 
