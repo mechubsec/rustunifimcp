@@ -45,7 +45,7 @@ RUN touch rustunifimcp/src/main.rs rustunifimcp-core/src/lib.rs && \
 # Already a multi-arch image index digest (covers linux/amd64 and
 # linux/arm64), resolved on 2026-08-24 -- confirmed again on 2026-09-29 while
 # adding the arm64 build (MEC-507); unchanged.
-FROM gcr.io/distroless/cc-debian13:nonroot@sha256:08476c244888bfb425bae1ae4dd7c17f093e972aab8426883d97f3c6f280f7c1
+FROM gcr.io/distroless/cc-debian13:nonroot@sha256:cc66d222f0a7ec996b78a99fe76a969bc80b539a5016ad866c14d1949bc6d0ab
 
 # Run as nonroot user (UID 65532)
 USER 65532:65532
