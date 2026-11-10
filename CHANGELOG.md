@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.13] - 2026-11-09
+
+### Security
+
+- The container image's `distroless/cc-debian13` runtime base moves to `cc66d22`,
+  which carries zlib `1.3.1-1+deb13u1` for CVE-2026-76844 and CVE-2026-85091. The
+  0.6.12 image's base is affected (#176).
+- `rmcp` 3.9.0 for RUSTSEC-2026-0462 (#175). The advisory is in rmcp's Streamable
+  HTTP client, which this server does not use.
+
 ### Changed
 
 - A firewall zone delete must be the last mutation in its change set, so a set holds
