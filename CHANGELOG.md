@@ -7,14 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.14] - 2026-11-13
+
+### Security
+
+- quinn-proto 0.11.19 and quinn-udp 0.5.16 for RUSTSEC-2026-0523, -0524 and -0538
+  (#182), and rustix 1.1.6 for RUSTSEC-2026-0486 (#183). Lockfile only.
+
 ### Changed
 
+- axum-server 0.9 (#180), the HTTPS listener, and uuid 1.29.2 (#178).
 - The container image is published for `linux/amd64` and `linux/arm64` again,
   so `docker pull` works on Apple Silicon and other arm64 hosts
   (mechubsec/rustjunosmcp#648). Each platform builds on a native GitHub-hosted
   runner rather than QEMU (the emulated build was dropped in 0.6.0 for making
   releases take most of an hour). Both registries get one manifest list, which
   is what is signed and attested. Releases before this change are amd64-only.
+
+### Fixed
+
+- `backfill-dockerhub-signature` signs the Docker Hub image only when its tag
+  resolves to the same digest that GHCR signed, and refuses otherwise (#184).
 
 ## [0.6.13] - 2026-11-09
 
