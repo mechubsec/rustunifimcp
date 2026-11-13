@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The container image is published for `linux/amd64` and `linux/arm64` again,
+  so `docker pull` works on Apple Silicon and other arm64 hosts
+  (mechubsec/rustjunosmcp#648). Each platform builds on a native GitHub-hosted
+  runner rather than QEMU (the emulated build was dropped in 0.6.0 for making
+  releases take most of an hour). Both registries get one manifest list, which
+  is what is signed and attested. Releases before this change are amd64-only.
+
 ## [0.6.13] - 2026-11-09
 
 ### Security
