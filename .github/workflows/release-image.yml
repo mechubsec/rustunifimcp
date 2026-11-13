@@ -135,22 +135,20 @@ jobs:
           path: '**/*.cdx.json'
           retention-days: 90
 
-  build-and-push:
+  # Guards run before anything is pushed: a failure here means no platform
+  # leg ever starts, so nothing reaches either registry.
+  guard:
     if: github.event_name == 'push'
+    name: Version and republish guards
     needs: sbom
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.version.outputs.version }}
+      is_latest: ${{ steps.version.outputs.is_latest }}
+      sha: ${{ steps.version.outputs.sha }}
     permissions:
       contents: read
-      packages: write
-      # Keyless cosign signing and the provenance attestation both exchange
-      # this job's OIDC token for a short-lived identity; no key material is
-      # stored anywhere. This workflow only ever runs from a version-tag push,
-      # never a PR or an arbitrary branch, so a Rekor/attestation entry is
-      # only ever created for a tagged release.
-      id-token: write
-      attestations: write
+      packages: read
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -215,13 +213,13 @@ jobs:
             [ "${t#v}" = "$tag_cargo" ] && LATEST_STABLE="$t"
           done
           if [ "v$VERSION" = "$LATEST_STABLE" ]; then
-            echo "is_latest=true" >> $GITHUB_OUTPUT
+            echo "is_latest=true" >> "$GITHUB_OUTPUT"
           else
-            echo "is_latest=false" >> $GITHUB_OUTPUT
+            echo "is_latest=false" >> "$GITHUB_OUTPUT"
             echo "not tagging latest: newest stable is $LATEST_STABLE"
           fi
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "sha=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Refuse to republish an existing release tag
         # ghcr.io/<repo>:<version> is a moving tag: pushing to it again --
@@ -237,10 +235,11 @@ jobs:
           # Templating it straight into `run:` would make that text part of
           # the script bash parses; env keeps it a plain string.
           VERSION: ${{ steps.version.outputs.version }}
+          REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           for TAG in \
-            "ghcr.io/${{ github.repository }}:${VERSION}" \
+            "ghcr.io/${REPO}:${VERSION}" \
             "docker.io/mechub/rustunifimcp:${VERSION}"; do
             # A non-zero exit here is ambiguous: it covers both "the tag doesn't
             # exist yet" and transient failures (registry 5xx, rate limit,
@@ -259,27 +258,163 @@ jobs:
             echo "$TAG not yet published, proceeding"
           done
 
-      - name: Build and push Docker image
+  # One native runner per platform. QEMU-emulated builds made every release
+  # take most of an hour (reverted in dc3b7e1), so there is no emulation here.
+  # Each leg pushes untagged, by digest; no tag moves until build-and-push.
+  build:
+    if: github.event_name == 'push'
+    name: Build (${{ matrix.platform }})
+    needs: [guard, sbom]
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-24.04
+            slug: linux-amd64
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            slug: linux-arm64
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push by digest
         id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
           context: .
-          push: true
-          tags: |
-            ghcr.io/${{ github.repository }}:${{ steps.version.outputs.version }}
-            ghcr.io/${{ github.repository }}:sha-${{ steps.version.outputs.sha }}
-            ${{ steps.version.outputs.is_latest == 'true' && format('ghcr.io/{0}:latest', github.repository) || '' }}
-            docker.io/mechub/rustunifimcp:${{ steps.version.outputs.version }}
-            ${{ steps.version.outputs.is_latest == 'true' && 'docker.io/mechub/rustunifimcp:latest' || '' }}
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,"name=ghcr.io/${{ github.repository }},docker.io/mechub/rustunifimcp",push-by-digest=true,name-canonical=true,push=true
           labels: |
             org.opencontainers.image.title=rustunifimcp
             org.opencontainers.image.description=UniFi Network MCP server
-            org.opencontainers.image.version=${{ steps.version.outputs.version }}
+            org.opencontainers.image.version=${{ needs.guard.outputs.version }}
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          platforms: linux/amd64
+          cache-from: type=gha,scope=${{ matrix.slug }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.slug }}
+
+      - name: Export digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/digests"
+          touch "${RUNNER_TEMP}/digests/${DIGEST#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: digests-${{ matrix.slug }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # Joins the per-platform images into the tagged manifest lists, then signs
+  # and attests each list's digest. Only this job holds id-token/attestations.
+  build-and-push:
+    if: github.event_name == 'push'
+    name: Publish manifest list
+    needs: [guard, build]
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ needs.guard.outputs.version }}
+    permissions:
+      contents: read
+      packages: write
+      # Keyless cosign signing and the provenance attestation both exchange
+      # this job's OIDC token for a short-lived identity; no key material is
+      # stored anywhere. This workflow only ever runs from a version-tag push,
+      # never a PR or an arbitrary branch, so a Rekor/attestation entry is
+      # only ever created for a tagged release.
+      id-token: write
+      attestations: write
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: digests-*
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # One manifest list per registry, each from that registry's own
+      # per-platform digests. Each list's digest is read back rather than
+      # assumed equal across registries, and that digest is what gets signed.
+      - name: Create manifest lists
+        id: manifest
+        shell: bash
+        env:
+          VERSION: ${{ needs.guard.outputs.version }}
+          IS_LATEST: ${{ needs.guard.outputs.is_latest }}
+          SHA: ${{ needs.guard.outputs.sha }}
+          GHCR_IMAGE: ghcr.io/${{ github.repository }}
+          DH_IMAGE: docker.io/mechub/rustunifimcp
+          PLATFORM_COUNT: '2'   # keep equal to the build matrix size
+        run: |
+          set -euo pipefail
+          cd "${RUNNER_TEMP}/digests"
+          mapfile -t digests < <(find . -maxdepth 1 -type f -printf '%f\n')
+          if [ "${#digests[@]}" -ne "${PLATFORM_COUNT}" ]; then
+            echo "::error::expected ${PLATFORM_COUNT} platform digests, found ${#digests[@]}"
+            exit 1
+          fi
+          # publish <image> <output name> <extra tag>...
+          publish() {
+            local image="$1" output="$2"
+            shift 2
+            local list_digest
+            local -a args=(-t "${image}:${VERSION}")
+            local extra
+            for extra in "$@"; do args+=(-t "${image}:${extra}"); done
+            if [ "${IS_LATEST}" = "true" ]; then args+=(-t "${image}:latest"); fi
+            local platform_digest
+            for platform_digest in "${digests[@]}"; do args+=("${image}@sha256:${platform_digest}"); done
+            docker buildx imagetools create "${args[@]}"
+            list_digest="$(docker buildx imagetools inspect "${image}:${VERSION}" --format '{{json .Manifest}}' | jq -r .digest)"
+            if [[ "${list_digest}" != sha256:* ]]; then
+              echo "::error::could not read the manifest-list digest of ${image}:${VERSION} (got '${list_digest}')"
+              exit 1
+            fi
+            echo "${output}=${list_digest}" >> "$GITHUB_OUTPUT"
+          }
+          publish "${GHCR_IMAGE}" ghcr-digest "sha-${SHA}"
+          publish "${DH_IMAGE}" dockerhub-digest
 
       - name: Install cosign
         uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
@@ -287,12 +422,12 @@ jobs:
       - name: Sign image (keyless)
         # Sign by digest, not by the mutable tags above -- a tag can be
         # repointed later, but the digest is what was actually just pushed.
-        # docker/build-push-action's digest output is the pushed image's
-        # digest, so this one signature covers what was published.
+        # This is the manifest-list digest, so one signature covers every
+        # platform image underneath it.
         run: cosign sign --yes "ghcr.io/${REPO}@${DIGEST}"
         env:
           REPO: ${{ github.repository }}
-          DIGEST: ${{ steps.build.outputs.digest }}
+          DIGEST: ${{ steps.manifest.outputs.ghcr-digest }}
 
       - name: Sign image (keyless) -- Docker Hub
         # `cosign copy --only=sig` copies nothing for cosign v3 OCI-referrer
@@ -313,7 +448,7 @@ jobs:
             fi
           fi
         env:
-          DIGEST: ${{ steps.build.outputs.digest }}
+          DIGEST: ${{ steps.manifest.outputs.dockerhub-digest }}
 
       - name: Verify signatures (hard gate) -- GHCR and Docker Hub
         # Docker Hub can take seconds to serve a just-pushed signature: v0.6.4
@@ -322,7 +457,7 @@ jobs:
         # Retry before failing; a signature that never appears still fails.
         run: |
           set -euo pipefail
-          for ref in "ghcr.io/${REPO}@${DIGEST}" "docker.io/mechub/rustunifimcp@${DIGEST}"; do
+          for ref in "ghcr.io/${REPO}@${GHCR_DIGEST}" "docker.io/mechub/rustunifimcp@${DH_DIGEST}"; do
             for attempt in 1 2 3 4 5 6; do
               echo "Verifying ${ref} (attempt ${attempt})"
               if cosign verify \
@@ -338,20 +473,21 @@ jobs:
           done
         env:
           REPO: ${{ github.repository }}
-          DIGEST: ${{ steps.build.outputs.digest }}
+          GHCR_DIGEST: ${{ steps.manifest.outputs.ghcr-digest }}
+          DH_DIGEST: ${{ steps.manifest.outputs.dockerhub-digest }}
 
       - name: Attest build provenance -- GHCR
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ghcr.io/${{ github.repository }}
-          subject-digest: ${{ steps.build.outputs.digest }}
+          subject-digest: ${{ steps.manifest.outputs.ghcr-digest }}
           push-to-registry: true
 
       - name: Attest build provenance -- Docker Hub
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: docker.io/mechub/rustunifimcp
-          subject-digest: ${{ steps.build.outputs.digest }}
+          subject-digest: ${{ steps.manifest.outputs.dockerhub-digest }}
           push-to-registry: true
 
       - name: Download SBOM
@@ -366,7 +502,7 @@ jobs:
         uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
         with:
           subject-name: ghcr.io/${{ github.repository }}
-          subject-digest: ${{ steps.build.outputs.digest }}
+          subject-digest: ${{ steps.manifest.outputs.ghcr-digest }}
           sbom-path: rustunifimcp/rustunifimcp.cdx.json
           push-to-registry: true
 
@@ -374,7 +510,7 @@ jobs:
         uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
         with:
           subject-name: docker.io/mechub/rustunifimcp
-          subject-digest: ${{ steps.build.outputs.digest }}
+          subject-digest: ${{ steps.manifest.outputs.dockerhub-digest }}
           sbom-path: rustunifimcp/rustunifimcp.cdx.json
           push-to-registry: true
 
