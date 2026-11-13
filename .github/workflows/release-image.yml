@@ -72,6 +72,13 @@ jobs:
             echo "::error::could not resolve a digest for ghcr.io/${GITHUB_REPOSITORY}:${TAG#v}"
             exit 1
           fi
+          # The release job builds one manifest list per registry, so only sign
+          # Docker Hub if its tag resolves to the very digest GHCR signed.
+          DH_DIGEST=$(docker buildx imagetools inspect "docker.io/mechub/rustunifimcp:${TAG#v}" --format '{{json .Manifest}}' | jq -r '.digest')
+          if [[ "$DH_DIGEST" != "$DIGEST" ]]; then
+            echo "::error::docker.io/mechub/rustunifimcp:${TAG#v} is ${DH_DIGEST}, not the GHCR digest ${DIGEST}; refusing to sign an image GHCR did not sign"
+            exit 1
+          fi
           echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
 
       - name: Verify the GHCR image is already signed
