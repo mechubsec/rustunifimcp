@@ -31,7 +31,7 @@ cargo fmt --all -- --check
 cargo clippy --all-targets --locked -- -D warnings
 ```
 
-CI pins the toolchain to `1.98.0`; the workspace's declared MSRV floor (`rust-version` in `Cargo.toml`) is `1.89`.
+CI pins the toolchain to `1.100.0`; the workspace's declared MSRV floor (`rust-version` in `Cargo.toml`) is `1.89`.
 
 If you touch the `Dockerfile` or the container entrypoint, `ci.yml`'s `container-guard` job also builds the image and asserts that config/state file paths (`/etc/unifimcp/controllers.json`, `/var/lib/unifimcp/tokens.json`, `/var/lib/unifimcp/changesets.json`) survive an operator overriding `--host` at the CMD layer. You can reproduce the build locally with:
 
