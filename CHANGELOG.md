@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- The container image runs on `distroless/base-nossl-debian13`, with only
+  `libgcc_s.so.1` copied in, so `libssl3t64` (unfixed CVE-2026-124709) is no
+  longer in the image. The server is rustls-only and never loaded it.
+
 ## [0.6.14] - 2026-11-13
 
 ### Security

@@ -101,6 +101,20 @@ jobs:
           cache-from: type=gha,scope=ci-conformance
           cache-to: type=gha,scope=ci-conformance,mode=max
 
+      - name: Image runs and has no libssl
+        run: |
+          set -euo pipefail
+          # libgcc_s must resolve on base-nossl, or the binary cannot start.
+          docker run --rm rustunifimcp:ci --version
+          container=$(docker create rustunifimcp:ci)
+          files=$(docker export "$container" | tar -t)
+          docker rm "$container" >/dev/null
+          if grep -E 'libssl|libcrypto' <<<"$files"; then
+            echo "FAIL: image ships libssl/libcrypto" >&2
+            exit 1
+          fi
+          grep -q 'libgcc_s\.so\.1' <<<"$files" || { echo "FAIL: image lacks libgcc_s.so.1" >&2; exit 1; }
+
       - name: Conformance
         uses: mechubsec/mecmcp/packaging/conformance@78f0b978cf67ca10547cce4c15111eb7a872d886
         with:
