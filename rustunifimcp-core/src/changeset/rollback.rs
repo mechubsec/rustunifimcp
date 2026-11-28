@@ -31,6 +31,9 @@ where
             StagedMutation::Update { id, .. } | StagedMutation::Delete { id, .. } => {
                 preimage.get_resource(id)
             }
+            StagedMutation::Reorder { .. } => mutation
+                .preimage_key()
+                .and_then(|key| preimage.get_resource(&key)),
             StagedMutation::Restore { .. } => {
                 // Restores cannot be rolled back - the entire controller was overwritten
                 failures.push(format!(

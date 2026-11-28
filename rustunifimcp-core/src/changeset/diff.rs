@@ -75,6 +75,14 @@ pub fn diff_against_preimage(
                     // before/after at the resource level. The backup_id is the "after".
                     (None, Some(serde_json::json!({"backup_id": backup_id})))
                 }
+                // Ids only, so nothing to project: the pair's order before,
+                // and the staged order (created policies by name) after.
+                StagedMutation::Reorder { order, .. } => (
+                    mutation
+                        .preimage_key()
+                        .and_then(|key| preimage.get_resource(&key)),
+                    Some(serde_json::json!({ "order": order })),
+                ),
             };
 
             Change {

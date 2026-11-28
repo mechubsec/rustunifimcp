@@ -174,7 +174,8 @@ pub fn check_writable_fields(mutations: &[StagedMutation]) -> Result<(), UnifiEr
                 (kind, Some(body))
             }
             StagedMutation::Delete { kind, .. } => (kind, None),
-            StagedMutation::Restore { .. } => continue,
+            // No body; its kind and order are `check_policy_reorders`'.
+            StagedMutation::Restore { .. } | StagedMutation::Reorder { .. } => continue,
         };
 
         let resource_kind: ResourceKind = serde_json::from_value(Value::String(kind.clone()))
@@ -421,6 +422,12 @@ enum ZoneLookup<'index> {
 }
 
 impl ZoneIndex {
+    /// Whether `id` is a zone `_id` on this controller.
+    #[must_use]
+    pub fn contains(&self, id: &str) -> bool {
+        self.by_id.contains_key(id)
+    }
+
     /// Build the index from the controller's firewall zone list.
     ///
     /// # Errors
@@ -519,7 +526,10 @@ pub fn referenced_zone_ids(mutations: &[StagedMutation]) -> Vec<String> {
     for mutation in mutations {
         let body = match mutation {
             StagedMutation::Create { body, .. } | StagedMutation::Update { body, .. } => body,
-            StagedMutation::Delete { .. } | StagedMutation::Restore { .. } => continue,
+            // A reorder's zones are checked live when its pre-image is captured.
+            StagedMutation::Delete { .. }
+            | StagedMutation::Restore { .. }
+            | StagedMutation::Reorder { .. } => continue,
         };
 
         for (_, zone_id) in zones_named_by(body) {
@@ -627,7 +637,9 @@ pub fn check_zone_deletions(
             StagedMutation::Update { kind, id, .. } | StagedMutation::Delete { kind, id } => {
                 (kind, id)
             }
-            StagedMutation::Create { .. } | StagedMutation::Restore { .. } => continue,
+            StagedMutation::Create { .. }
+            | StagedMutation::Restore { .. }
+            | StagedMutation::Reorder { .. } => continue,
         };
         if kind == ZONE_KIND {
             continue;
@@ -677,7 +689,7 @@ pub fn check_zone_deletions(
             StagedMutation::Delete { id, .. } => {
                 live.remove(id);
             }
-            StagedMutation::Restore { .. } => {}
+            StagedMutation::Restore { .. } | StagedMutation::Reorder { .. } => {}
         }
     }
 
@@ -703,7 +715,9 @@ pub fn check_zone_references(
     for mutation in mutations {
         let body = match mutation {
             StagedMutation::Create { body, .. } | StagedMutation::Update { body, .. } => body,
-            StagedMutation::Delete { .. } | StagedMutation::Restore { .. } => continue,
+            StagedMutation::Delete { .. }
+            | StagedMutation::Restore { .. }
+            | StagedMutation::Reorder { .. } => continue,
         };
 
         for (field, zone_id) in zones_named_by(body) {
@@ -743,7 +757,9 @@ pub fn referenced_network_ids(mutations: &[StagedMutation]) -> Vec<String> {
     for mutation in mutations {
         let body = match mutation {
             StagedMutation::Create { body, .. } | StagedMutation::Update { body, .. } => body,
-            StagedMutation::Delete { .. } | StagedMutation::Restore { .. } => continue,
+            StagedMutation::Delete { .. }
+            | StagedMutation::Restore { .. }
+            | StagedMutation::Reorder { .. } => continue,
         };
 
         let Some(network_id) = body.get("network_id").and_then(Value::as_str) else {
@@ -800,7 +816,9 @@ pub fn check_network_references(
     for mutation in mutations {
         let body = match mutation {
             StagedMutation::Create { body, .. } | StagedMutation::Update { body, .. } => body,
-            StagedMutation::Delete { .. } | StagedMutation::Restore { .. } => continue,
+            StagedMutation::Delete { .. }
+            | StagedMutation::Restore { .. }
+            | StagedMutation::Reorder { .. } => continue,
         };
         let Some(network_id) = body.get("network_id").and_then(Value::as_str) else {
             continue;
