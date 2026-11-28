@@ -435,3 +435,243 @@ pub fn order_took(live_entry: &Value, applied: &[String]) -> bool {
     live == applied
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::changeset::{CreatedRef, diff_against_preimage};
+
+    const LAN: &str = "000000000000000000000101";
+    const WAN: &str = "000000000000000000000102";
+    const A: &str = "000000000000000000000201";
+    const B: &str = "000000000000000000000203";
+    const PRE: &str = "000000000000000000000202";
+
+    fn policy(id: &str, index: u64, predefined: bool, source: &str) -> Value {
+        json!({
+            "_id": id, "name": id, "index": index, "predefined": predefined,
+            "source": {"zone_id": source}, "destination": {"zone_id": WAN}
+        })
+    }
+
+    /// The live list: two customs after one predefined, plus one in another pair.
+    fn live_list() -> Value {
+        json!([
+            policy(B, 40001, false, LAN),
+            policy(PRE, 30000, true, LAN),
+            policy(A, 40000, false, LAN),
+            policy("000000000000000000000299", 40002, false, WAN),
+        ])
+    }
+
+    fn preimage() -> Preimage {
+        Preimage::from_resources(vec![pair_entry(&live_list(), LAN, WAN).expect("entry")])
+    }
+
+    fn id(value: &str) -> OrderEntry {
+        OrderEntry::Id(value.to_owned())
+    }
+
+    fn named(value: &str) -> OrderEntry {
+        OrderEntry::Created(CreatedRef {
+            created_name: value.to_owned(),
+        })
+    }
+
+    fn create(name: &str, source: &str) -> StagedMutation {
+        StagedMutation::create(
+            POLICY_KIND,
+            json!({"name": name, "source": {"zone_id": source}, "destination": {"zone_id": WAN}}),
+        )
+    }
+
+    fn check(mutations: &[StagedMutation]) -> Result<(), UnifiError> {
+        check_policy_reorders(&preimage(), mutations)
+    }
+
+    #[test]
+    fn the_entry_holds_only_the_pairs_customs_in_index_order() {
+        let entry = pair_entry(&live_list(), LAN, WAN).expect("entry");
+        assert_eq!(entry_order(&entry), vec![A, B]);
+        assert_eq!(entry["predefined_ids"], json!([PRE]));
+    }
+
+    #[test]
+    fn a_custom_policy_before_the_predefined_ones_is_refused() {
+        let list = json!([policy(A, 1, false, LAN), policy(PRE, 30000, true, LAN)]);
+        let error = pair_entry(&list, LAN, WAN).expect_err("cannot be placed");
+        assert!(error.to_string().contains("before predefined"), "{error}");
+    }
+
+    #[test]
+    fn a_permutation_is_accepted() {
+        check(&[StagedMutation::reorder(LAN, WAN, vec![id(B), id(A)])]).expect("valid");
+    }
+
+    #[test]
+    fn an_order_that_drops_a_policy_is_refused() {
+        let error = check(&[StagedMutation::reorder(LAN, WAN, vec![id(B)])]).expect_err("drop");
+        assert!(error.to_string().contains("not a permutation"), "{error}");
+    }
+
+    #[test]
+    fn a_duplicate_is_refused() {
+        let error = check(&[StagedMutation::reorder(LAN, WAN, vec![id(A), id(A), id(B)])])
+            .expect_err("duplicate");
+        assert!(error.to_string().contains("twice"), "{error}");
+    }
+
+    #[test]
+    fn a_foreign_policy_is_refused() {
+        let foreign = "000000000000000000000299";
+        let error = check(&[StagedMutation::reorder(
+            LAN,
+            WAN,
+            vec![id(A), id(B), id(foreign)],
+        )])
+        .expect_err("foreign");
+        assert!(error.to_string().contains("not a custom policy"), "{error}");
+    }
+
+    #[test]
+    fn a_predefined_policy_is_refused() {
+        let error = check(&[StagedMutation::reorder(
+            LAN,
+            WAN,
+            vec![id(PRE), id(A), id(B)],
+        )])
+        .expect_err("predefined");
+        assert!(error.to_string().contains("predefined"), "{error}");
+    }
+
+    #[test]
+    fn a_pair_without_a_preimage_is_refused() {
+        let error = check(&[StagedMutation::reorder(WAN, WAN, vec![])]).expect_err("no entry");
+        assert!(error.to_string().contains("pre-image"), "{error}");
+    }
+
+    #[test]
+    fn a_created_policy_can_be_placed_by_name() {
+        check(&[
+            create("mi-new", LAN),
+            StagedMutation::reorder(LAN, WAN, vec![named("mi-new"), id(A), id(B)]),
+        ])
+        .expect("valid");
+    }
+
+    #[test]
+    fn an_ambiguous_created_name_is_refused() {
+        let error = check(&[
+            create("mi-new", LAN),
+            create("mi-new", LAN),
+            StagedMutation::reorder(LAN, WAN, vec![named("mi-new"), id(A), id(B)]),
+        ])
+        .expect_err("ambiguous");
+        assert!(error.to_string().contains("exactly one"), "{error}");
+    }
+
+    #[test]
+    fn a_created_name_staged_after_the_reorder_is_refused() {
+        let error = check(&[
+            StagedMutation::reorder(LAN, WAN, vec![named("mi-new"), id(A), id(B)]),
+            create("mi-new", LAN),
+        ])
+        .expect_err("later");
+        assert!(error.to_string().contains("after the reorder"), "{error}");
+    }
+
+    #[test]
+    fn a_created_name_in_another_pair_is_refused() {
+        let error = check(&[
+            create("mi-new", WAN),
+            StagedMutation::reorder(LAN, WAN, vec![named("mi-new"), id(A), id(B)]),
+        ])
+        .expect_err("other pair");
+        assert!(error.to_string().contains("another zone pair"), "{error}");
+    }
+
+    #[test]
+    fn a_create_in_the_pair_the_order_omits_is_refused() {
+        let error = check(&[
+            create("mi-new", LAN),
+            StagedMutation::reorder(LAN, WAN, vec![id(A), id(B)]),
+        ])
+        .expect_err("omitted create");
+        assert!(error.to_string().contains("mi-new"), "{error}");
+    }
+
+    #[test]
+    fn deleting_a_placed_policy_is_refused() {
+        let error = check(&[
+            StagedMutation::reorder(LAN, WAN, vec![id(B), id(A)]),
+            StagedMutation::delete(POLICY_KIND, A),
+        ])
+        .expect_err("delete");
+        assert!(error.to_string().contains("deletes"), "{error}");
+    }
+
+    #[test]
+    fn a_created_name_resolves_to_the_id_its_create_returned() {
+        let mutations = [
+            create("mi-new", LAN),
+            StagedMutation::reorder(LAN, WAN, vec![named("mi-new"), id(A), id(B)]),
+        ];
+        let created = HashMap::from([(0, "000000000000000000000204".to_owned())]);
+        let StagedMutation::Reorder { order, .. } =
+            resolve_created(&mutations, 1, &created).expect("resolves")
+        else {
+            panic!("still a reorder");
+        };
+        assert_eq!(
+            resolved_ids(&order).expect("ids"),
+            vec!["000000000000000000000204", A, B]
+        );
+        assert!(resolve_created(&mutations, 1, &HashMap::new()).is_err());
+    }
+
+    #[test]
+    fn rollback_restores_the_prior_order_with_created_policies_last() {
+        let entry = pair_entry(&live_list(), LAN, WAN).expect("entry");
+        let applied = vec![
+            "000000000000000000000204".to_owned(),
+            B.to_owned(),
+            A.to_owned(),
+        ];
+        assert_eq!(
+            rollback_ids(&entry, &applied),
+            vec![A, B, "000000000000000000000204"]
+        );
+    }
+
+    #[test]
+    fn verification_reads_the_order_back() {
+        let entry = pair_entry(&live_list(), LAN, WAN).expect("entry");
+        assert!(order_took(&entry, &[A.to_owned(), B.to_owned()]));
+        assert!(!order_took(&entry, &[B.to_owned(), A.to_owned()]));
+    }
+
+    #[test]
+    fn the_diff_shows_the_old_and_new_order() {
+        let mutations = [StagedMutation::reorder(LAN, WAN, vec![id(B), id(A)])];
+        let diff = diff_against_preimage(&preimage(), &mutations).expect("diff");
+        let change = &diff.changes[0];
+        assert_eq!(
+            change.before.as_ref().expect("before")["order"],
+            json!([A, B])
+        );
+        assert_eq!(
+            change.after.as_ref().expect("after")["order"],
+            json!([B, A])
+        );
+    }
+
+    #[test]
+    fn the_fingerprint_covers_the_pairs_order() {
+        use crate::changeset::{actions_for, fingerprint_of};
+        let mutations = [StagedMutation::reorder(LAN, WAN, vec![id(B), id(A)])];
+        let before = fingerprint_of(&actions_for(&mutations, &preimage())).expect("fp");
+        let drifted = json!([policy(A, 40001, false, LAN), policy(B, 40000, false, LAN)]);
+        let drifted = Preimage::from_resources(vec![pair_entry(&drifted, LAN, WAN).expect("e")]);
+        let after = fingerprint_of(&actions_for(&mutations, &drifted)).expect("fp");
+        assert_ne!(before, after);
+    }
+}
