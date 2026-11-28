@@ -65,6 +65,16 @@ impl Preimage {
                     // guessing.
                     continue;
                 }
+                StagedMutation::Reorder {
+                    source_zone_id,
+                    destination_zone_id,
+                    ..
+                } => {
+                    data.push(
+                        super::reorder::capture_pair(client, source_zone_id, destination_zone_id)
+                            .await?,
+                    );
+                }
                 StagedMutation::Restore { .. } => {
                     // Restores overwrite the entire controller state. The pre-image
                     // would be the whole controller, which is not meaningful to capture.
@@ -171,6 +181,10 @@ impl Preimage {
             StagedMutation::Create { .. } => true, // Creates don't need pre-image coverage
             StagedMutation::Delete { .. } => true, // Deletes are checked at validate time
             StagedMutation::Restore { .. } => true, // Restores have no meaningful pre-image
+            // A reorder's drift check and rollback both need the pair's order.
+            StagedMutation::Reorder { .. } => mutation
+                .preimage_key()
+                .is_some_and(|key| self.get_resource(&key).is_some()),
         }
     }
 
@@ -229,6 +243,48 @@ pub enum StagedMutation {
         /// The backup ID to restore from.
         backup_id: String,
     },
+    /// Re-index the custom firewall policies of one zone pair.
+    ///
+    /// UniFi evaluates a zone pair's policies by `index`, first match, and
+    /// ignores `index` on create and on update; only `batch-reorder`
+    /// re-indexes. `order` must be a permutation of the pair's custom
+    /// policies, and may name a policy this set creates earlier by its staged
+    /// `name` (see [`OrderEntry`]).
+    Reorder {
+        /// Always `firewall_policy`.
+        kind: String,
+        /// The zone pair's source zone `_id`.
+        source_zone_id: String,
+        /// The zone pair's destination zone `_id`.
+        destination_zone_id: String,
+        /// The custom policies of the pair, first match first.
+        order: Vec<OrderEntry>,
+    },
+}
+
+/// One position in a staged reorder.
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+#[serde(untagged)]
+pub enum OrderEntry {
+    /// An existing policy, by `_id`.
+    Id(String),
+    /// A policy created earlier in the same change set, by its staged `name`.
+    Created(CreatedRef),
+}
+
+/// A reference to a policy created earlier in the same change set.
+///
+/// Its id is only known after its create lands, so the reference is resolved
+/// at apply from the id the controller returned.
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+#[serde(deny_unknown_fields)]
+pub struct CreatedRef {
+    /// The `name` of the staged create.
+    pub created_name: String,
 }
 
 impl StagedMutation {
@@ -278,7 +334,42 @@ impl StagedMutation {
     pub fn resource_id(&self) -> Option<&str> {
         match self {
             Self::Update { id, .. } | Self::Delete { id, .. } => Some(id.as_str()),
-            Self::Create { .. } | Self::Restore { .. } => None,
+            Self::Create { .. } | Self::Restore { .. } | Self::Reorder { .. } => None,
+        }
+    }
+
+    /// Stage a reorder of one zone pair's custom firewall policies.
+    #[must_use]
+    pub fn reorder(
+        source_zone_id: impl Into<String>,
+        destination_zone_id: impl Into<String>,
+        order: Vec<OrderEntry>,
+    ) -> Self {
+        Self::Reorder {
+            kind: super::reorder::POLICY_KIND.to_owned(),
+            source_zone_id: source_zone_id.into(),
+            destination_zone_id: destination_zone_id.into(),
+            order,
+        }
+    }
+
+    /// The pre-image key this mutation's prior state is stored under.
+    ///
+    /// The resource id for an update or delete; a synthetic zone-pair key for
+    /// a reorder, whose prior state is the pair's order rather than one
+    /// resource.
+    #[must_use]
+    pub fn preimage_key(&self) -> Option<String> {
+        match self {
+            Self::Reorder {
+                source_zone_id,
+                destination_zone_id,
+                ..
+            } => Some(super::reorder::pair_key(
+                source_zone_id,
+                destination_zone_id,
+            )),
+            _ => self.resource_id().map(str::to_owned),
         }
     }
 
@@ -294,6 +385,12 @@ impl StagedMutation {
                  cannot be undone by rollback)",
                 backup_id
             ),
+            Self::Reorder {
+                kind,
+                source_zone_id,
+                destination_zone_id,
+                ..
+            } => format!("reorder {kind} {source_zone_id} -> {destination_zone_id}"),
         }
     }
 }

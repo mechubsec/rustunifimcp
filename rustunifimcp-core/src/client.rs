@@ -906,6 +906,18 @@ impl crate::changeset::apply::ControllerOps for UnifiClient {
             StagedMutation::Restore { .. } => Err(UnifiError::Malformed(
                 "backup restore not implemented".to_owned(),
             )),
+
+            StagedMutation::Reorder {
+                source_zone_id,
+                destination_zone_id,
+                order,
+                ..
+            } => {
+                let ids = crate::changeset::reorder::resolved_ids(order)?;
+                self.batch_reorder(source_zone_id, destination_zone_id, &ids)
+                    .await?;
+                Ok(None)
+            }
         }
     }
 
@@ -996,6 +1008,21 @@ impl crate::changeset::apply::ControllerOps for UnifiClient {
             StagedMutation::Restore { .. } => Err(UnifiError::Malformed(
                 "restore rollback not supported".to_owned(),
             )),
+
+            StagedMutation::Reorder {
+                source_zone_id,
+                destination_zone_id,
+                order,
+                ..
+            } => {
+                let prior = prior_value.ok_or_else(|| {
+                    UnifiError::Malformed("rollback reorder: no prior order".to_owned())
+                })?;
+                let applied = crate::changeset::reorder::resolved_ids(order)?;
+                let ids = crate::changeset::reorder::rollback_ids(prior, &applied);
+                self.batch_reorder(source_zone_id, destination_zone_id, &ids)
+                    .await
+            }
         }
     }
 
@@ -1012,6 +1039,28 @@ impl crate::changeset::apply::ControllerOps for UnifiClient {
             let (kind, id) = match mutation {
                 StagedMutation::Update { kind, id, .. } | StagedMutation::Delete { kind, id } => {
                     (kind, id)
+                }
+                StagedMutation::Reorder {
+                    source_zone_id,
+                    destination_zone_id,
+                    ..
+                } => {
+                    let Some(recorded) = mutation
+                        .preimage_key()
+                        .and_then(|key| preimage.get_resource(&key))
+                    else {
+                        return Ok(false);
+                    };
+                    let live = crate::changeset::reorder::pair_live(
+                        self,
+                        source_zone_id,
+                        destination_zone_id,
+                    )
+                    .await?;
+                    if live != recorded {
+                        return Ok(false);
+                    }
+                    continue;
                 }
                 StagedMutation::Create { .. } | StagedMutation::Restore { .. } => continue,
             };
@@ -1170,6 +1219,35 @@ impl crate::changeset::apply::ControllerOps for UnifiClient {
                     // since they replace the entire controller state. Skip verification.
                     continue;
                 }
+                StagedMutation::Reorder {
+                    source_zone_id,
+                    destination_zone_id,
+                    order,
+                    ..
+                } => {
+                    use crate::changeset::reorder::{
+                        later_creates_in_pair, order_took, pair_live, resolved_ids,
+                    };
+                    let applied = resolved_ids(order)?;
+                    let live = pair_live(self, source_zone_id, destination_zone_id)
+                        .await
+                        .map_err(|e| {
+                            UnifiError::Malformed(format!(
+                                "could not verify {}: {e}",
+                                mutation.preview()
+                            ))
+                        })?;
+                    if !order_took(
+                        &live,
+                        &applied,
+                        later_creates_in_pair(mutations, index, created_ids),
+                    ) {
+                        failed_verifications.push(format!(
+                            "{}: the pair's order did not read back as staged",
+                            mutation.preview()
+                        ));
+                    }
+                }
             }
         }
 
@@ -1181,6 +1259,28 @@ impl crate::changeset::apply::ControllerOps for UnifiClient {
             )));
         }
 
+        Ok(())
+    }
+}
+
+impl UnifiClient {
+    /// Re-index one zone pair's custom policies with `batch-reorder`.
+    async fn batch_reorder(
+        &self,
+        source_zone_id: &str,
+        destination_zone_id: &str,
+        ids: &[String],
+    ) -> Result<(), UnifiError> {
+        use crate::changeset::reorder::{BATCH_REORDER_PATH, batch_body};
+        let site = self.default_site_for(ApiSurface::PrivateV2).await?;
+        self.put(
+            ApiSurface::PrivateV2,
+            BATCH_REORDER_PATH,
+            &[("site", &site)],
+            &[],
+            &batch_body(source_zone_id, destination_zone_id, ids),
+        )
+        .await?;
         Ok(())
     }
 }

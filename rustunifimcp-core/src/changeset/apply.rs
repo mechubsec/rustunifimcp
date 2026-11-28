@@ -97,9 +97,19 @@ where
 
     // Apply mutations sequentially
     for (index, mutation) in mutations.iter().enumerate() {
-        match controller.apply_mutation(index, mutation).await {
-            Ok(created_id) => {
-                succeeded.push(mutation.clone());
+        // A reorder may name a policy created earlier in this set, whose id
+        // exists only now. `succeeded` keeps the resolved form, so rollback
+        // and verification see ids, not names.
+        let outcome = match super::reorder::resolve_created(mutations, index, &created_ids) {
+            Ok(mutation) => controller
+                .apply_mutation(index, &mutation)
+                .await
+                .map(|created| (mutation, created)),
+            Err(error) => Err(error),
+        };
+        match outcome {
+            Ok((applied, created_id)) => {
+                succeeded.push(applied);
                 if let Some(id) = created_id {
                     created_ids.insert(index, id);
                 }
@@ -130,7 +140,7 @@ where
     // If all succeeded, verify they landed as expected
     if attempted_and_failed.is_empty() && never_attempted.is_empty() {
         let (state, verification_failure) =
-            match controller.verify_applied(mutations, &created_ids).await {
+            match controller.verify_applied(&succeeded, &created_ids).await {
                 Ok(()) => (State::Applied, None),
                 Err(error) => (State::AppliedUnverified, Some(error.to_string())),
             };
@@ -380,6 +390,7 @@ where
                 // since they replace the entire controller state. Skip verification.
                 continue;
             }
+            StagedMutation::Reorder { .. } => continue,
         }
     }
 

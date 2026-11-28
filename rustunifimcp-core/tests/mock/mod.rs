@@ -301,8 +301,10 @@ impl ControllerOps for MockController {
                         )));
                     }
                 }
-                StagedMutation::Update { .. } | StagedMutation::Delete { .. } => {
-                    // Mock always reports success for updates and deletes
+                StagedMutation::Update { .. }
+                | StagedMutation::Delete { .. }
+                | StagedMutation::Reorder { .. } => {
+                    // Mock always reports success for updates, deletes and reorders
                 }
                 StagedMutation::Restore { .. } => {
                     // Skip verification for restores

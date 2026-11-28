@@ -24,9 +24,9 @@ use rustunifimcp_core::{
     changeset::{
         Preimage, StagedMutation, State, UnifiTransaction, ZoneIndex, actions_for,
         apply_sequentially, check_firewall_policy_against_live, check_network_references,
-        check_writable_fields, check_zone_deletions, check_zone_references, diff_against_preimage,
-        fingerprint_of, mutations_of, preimage_of, referenced_network_ids, referenced_zone_ids,
-        validate_locally,
+        check_policy_reorders, check_writable_fields, check_zone_deletions, check_zone_references,
+        diff_against_preimage, fingerprint_of, mutations_of, preimage_of, referenced_network_ids,
+        referenced_zone_ids, validate_locally,
     },
     client::UnifiClient,
     error::UnifiError,
@@ -1498,7 +1498,18 @@ impl UnifiServer {
                         fixes a change set's plan digest at creation, so this can only be \
                         called once per change_set_id (on the draft from \
                         unifi_create_change_set); a change set that already has a staged \
-                        plan must be cancelled and recreated with the combined mutations."
+                        plan must be cancelled and recreated with the combined mutations. \
+                        Each mutation is tagged by `operation`: create {kind, body}, update \
+                        {kind, id, body}, delete {kind, id}, restore {backup_id}, or reorder \
+                        {kind: \"firewall_policy\", source_zone_id, destination_zone_id, \
+                        order}. A reorder sets the first-match order of one zone pair's \
+                        custom policies (UniFi ignores `index` on create and update): \
+                        `order` must list every custom policy of the pair exactly once, by \
+                        id, and may place a policy created earlier in the same set as \
+                        {\"created_name\": \"<its staged name>\"}, which must name exactly \
+                        one create. Predefined policies are not moved, and a pair with a \
+                        custom policy placed before its predefined ones is refused. Apply \
+                        refuses as stale if the pair's order moved since staging."
     )]
     async fn unifi_stage_change(
         &self,
@@ -1569,6 +1580,17 @@ impl UnifiServer {
                 changeset::MutationSpec::Restore { backup_id } => {
                     StagedMutation::restore(backup_id)
                 }
+                changeset::MutationSpec::Reorder {
+                    kind,
+                    source_zone_id,
+                    destination_zone_id,
+                    order,
+                } => StagedMutation::Reorder {
+                    kind,
+                    source_zone_id,
+                    destination_zone_id,
+                    order,
+                },
             });
         }
 
@@ -1588,6 +1610,12 @@ impl UnifiServer {
             Ok(preimage) => preimage,
             Err(e) => return tool_error(format!("failed to capture pre-image: {e}")),
         };
+
+        // Needs the pair's order the pre-image just read, and refuses at
+        // staging so a reorder that is not a permutation is never approvable.
+        if let Err(e) = check_policy_reorders(&preimage, &mutations) {
+            return tool_error(format!("staged mutation refused: {e}"));
+        }
 
         let staged_count = mutations.len();
         let base = ChangeSetRecord {
@@ -1785,7 +1813,9 @@ impl UnifiServer {
             return tool_error(format!("zone deletion check failed: {e}"));
         }
 
-        if let Err(e) = check_firewall_policy_against_live(&preimage, &mutations) {
+        if let Err(e) = check_firewall_policy_against_live(&preimage, &mutations)
+            .and_then(|()| check_policy_reorders(&preimage, &mutations))
+        {
             return tool_error(format!("schema constraints failed: {e}"));
         }
 
@@ -1950,6 +1980,7 @@ impl UnifiServer {
         }
         if let Err(e) = check_firewall_policy_against_live(&approval_preimage, &approval_mutations)
             .and_then(|()| check_zone_deletions(&approval_preimage, &approval_mutations))
+            .and_then(|()| check_policy_reorders(&approval_preimage, &approval_mutations))
         {
             return tool_error(format!("approval refused: {e}"));
         }
@@ -2174,6 +2205,7 @@ impl UnifiServer {
         if let Err(e) = check_writable_fields(&mutations)
             .and_then(|()| check_firewall_policy_against_live(&preimage, &mutations))
             .and_then(|()| check_zone_deletions(&preimage, &mutations))
+            .and_then(|()| check_policy_reorders(&preimage, &mutations))
         {
             let mut abandoned = claimed;
             abandoned.state = ChangeSetState::Failed;

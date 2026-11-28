@@ -10,15 +10,17 @@ pub mod apply;
 pub mod diff;
 pub mod preimage;
 pub mod record;
+pub mod reorder;
 pub mod rollback;
 pub mod validate;
 
 pub use apply::{ControllerOps, Outcome, State, apply_sequentially};
 pub use diff::{Change, Diff, diff_against_preimage};
-pub use preimage::{Preimage, StagedMutation};
+pub use preimage::{CreatedRef, OrderEntry, Preimage, StagedMutation};
 pub use record::{
     StagedAction, actions_for, actions_of, fingerprint_of, mutations_of, preimage_of,
 };
+pub use reorder::check_policy_reorders;
 pub use rollback::rollback_to_preimage;
 pub use validate::{
     ZoneIndex, check_firewall_policy_against_live, check_network_references, check_writable_fields,

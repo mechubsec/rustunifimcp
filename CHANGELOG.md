@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `unifi_stage_change` takes a `reorder` mutation that sets the first-match order of
+  one zone pair's custom firewall policies through
+  `PUT /v2/api/site/<site>/firewall-policies/batch-reorder`, the only call that
+  re-indexes them (UniFi Network 10.6.109 ignores `index` on create and on update):
+  `{"operation": "reorder", "kind": "firewall_policy", "source_zone_id": "…",
+  "destination_zone_id": "…", "order": ["<policy id>", {"created_name": "<name>"}, …]}`.
+  `order` must be a permutation of the pair's custom policies, and may place a policy
+  created earlier in the same set by its staged `name`, resolved at apply to the id
+  the create returned. Staging refuses an unknown zone, a foreign, predefined or
+  duplicate id, a dropped policy, and an ambiguous name; a pair with a custom policy
+  placed before its predefined ones is refused rather than moved. The pair's order is
+  the pre-image: apply refuses as stale if it moved, verifies by re-listing, and a
+  rollback restores it before deleting a policy the set created. A set that reorders
+  may not also carry a firewall-policy update that sets `source` or `destination`
+  (stage zone moves separately), and verification fails on any extra policy in the
+  pair other than one the set creates there after the reorder.
+
 ### Security
 
 - The container image runs on `distroless/base-nossl-debian13`, with only

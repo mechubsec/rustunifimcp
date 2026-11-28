@@ -49,8 +49,8 @@ pub fn actions_for(mutations: &[StagedMutation], preimage: &Preimage) -> Vec<Sta
         .map(|mutation| StagedAction {
             mutation: mutation.clone(),
             preimage: mutation
-                .resource_id()
-                .and_then(|id| preimage.get_resource(id)),
+                .preimage_key()
+                .and_then(|key| preimage.get_resource(&key)),
         })
         .collect()
 }
