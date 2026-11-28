@@ -21,7 +21,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   duplicate id, a dropped policy, and an ambiguous name; a pair with a custom policy
   placed before its predefined ones is refused rather than moved. The pair's order is
   the pre-image: apply refuses as stale if it moved, verifies by re-listing, and a
-  rollback restores it before deleting a policy the set created.
+  rollback restores it before deleting a policy the set created. A set that reorders
+  may not also carry a firewall-policy update that sets `source` or `destination`
+  (stage zone moves separately), and verification fails on any extra policy in the
+  pair other than one the set creates there after the reorder.
 
 ### Security
 

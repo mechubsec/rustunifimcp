@@ -429,6 +429,33 @@ pub fn rollback_ids(prior_entry: &Value, applied: &[String]) -> Vec<String> {
     ids
 }
 
+/// The ids of policies the set created after the reorder at `position`, in
+/// its pair: the only extras its verification may ignore.
+#[must_use]
+pub fn later_creates_in_pair<'a>(
+    mutations: &[StagedMutation],
+    position: usize,
+    created_ids: &'a HashMap<usize, String>,
+) -> Vec<&'a String> {
+    let StagedMutation::Reorder {
+        source_zone_id,
+        destination_zone_id,
+        ..
+    } = &mutations[position]
+    else {
+        return Vec::new();
+    };
+    created_ids
+        .iter()
+        .filter(|(created_at, _)| {
+            **created_at > position
+                && matches!(mutations.get(**created_at), Some(StagedMutation::Create { kind, body })
+                    if kind == POLICY_KIND && in_pair(body, source_zone_id, destination_zone_id))
+        })
+        .map(|(_, id)| id)
+        .collect()
+}
+
 /// Whether the live pair holds exactly `applied`, in that order, apart from
 /// policies this set created (one created after the reorder lands last and is
 /// ignored). Any other extra policy fails: it was not approved.
@@ -661,6 +688,22 @@ mod tests {
         // A policy this set created later is ignored; any other extra is not.
         assert!(order_took(&entry, &[A.to_owned()], [&B.to_owned()]));
         assert!(!order_took(&entry, &[A.to_owned()], []));
+    }
+
+    #[test]
+    fn only_later_creates_in_the_pair_may_be_ignored() {
+        let mutations = [
+            create("mi-early", LAN),
+            StagedMutation::reorder(LAN, WAN, vec![named("mi-early"), id(A), id(B)]),
+            create("mi-late", LAN),
+            create("mi-elsewhere", WAN),
+        ];
+        let created = HashMap::from([
+            (0, "early".to_owned()),
+            (2, "late".to_owned()),
+            (3, "elsewhere".to_owned()),
+        ]);
+        assert_eq!(later_creates_in_pair(&mutations, 1, &created), vec!["late"]);
     }
 
     #[test]

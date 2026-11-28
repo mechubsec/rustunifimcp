@@ -1225,7 +1225,9 @@ impl crate::changeset::apply::ControllerOps for UnifiClient {
                     order,
                     ..
                 } => {
-                    use crate::changeset::reorder::{order_took, pair_live, resolved_ids};
+                    use crate::changeset::reorder::{
+                        later_creates_in_pair, order_took, pair_live, resolved_ids,
+                    };
                     let applied = resolved_ids(order)?;
                     let live = pair_live(self, source_zone_id, destination_zone_id)
                         .await
@@ -1235,7 +1237,11 @@ impl crate::changeset::apply::ControllerOps for UnifiClient {
                                 mutation.preview()
                             ))
                         })?;
-                    if !order_took(&live, &applied, created_ids.values()) {
+                    if !order_took(
+                        &live,
+                        &applied,
+                        later_creates_in_pair(mutations, index, created_ids),
+                    ) {
                         failed_verifications.push(format!(
                             "{}: the pair's order did not read back as staged",
                             mutation.preview()
