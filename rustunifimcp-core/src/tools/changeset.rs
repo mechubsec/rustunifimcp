@@ -26,7 +26,9 @@ pub const DESCRIPTIONS: &[(&str, &str)] = &[
          recorded as a planned mutation against live configuration. Because UniFi \
          writes directly to running state, staging is a planning step only — it \
          snapshots the current state as a pre-image and defers the actual writes \
-         until apply.",
+         until apply. A `reorder` mutation sets the first-match order of one zone \
+         pair's custom firewall policies, and may place a policy created earlier \
+         in the same set by its staged name.",
     ),
     (
         "unifi_diff_change_set",
@@ -126,6 +128,19 @@ pub enum MutationSpec {
     Restore {
         /// The backup ID to restore from.
         backup_id: String,
+    },
+    /// Set the first-match order of one zone pair's custom firewall policies.
+    Reorder {
+        /// Must be `firewall_policy`.
+        kind: String,
+        /// The pair's source zone `_id`.
+        source_zone_id: String,
+        /// The pair's destination zone `_id`.
+        destination_zone_id: String,
+        /// Every custom policy of the pair once, first match first: a policy
+        /// `_id`, or `{"created_name": "<name>"}` for a policy created earlier
+        /// in this set.
+        order: Vec<crate::changeset::OrderEntry>,
     },
 }
 
