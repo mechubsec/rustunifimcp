@@ -1235,7 +1235,7 @@ impl crate::changeset::apply::ControllerOps for UnifiClient {
                                 mutation.preview()
                             ))
                         })?;
-                    if !order_took(&live, &applied) {
+                    if !order_took(&live, &applied, created_ids.values()) {
                         failed_verifications.push(format!(
                             "{}: the pair's order did not read back as staged",
                             mutation.preview()

@@ -340,12 +340,17 @@ pub fn check_policy_reorders(
                 {
                     return Err(refuse(format!("this set also deletes {id}")));
                 }
+                // Any zone change, not only one of a placed policy: a policy
+                // moved into the pair keeps its index and could land between
+                // the ordered ones, and the pre-image cannot say where.
                 StagedMutation::Update { kind, id, body }
                     if kind == POLICY_KIND
-                        && placed_ids.contains(id)
                         && (body.get("source").is_some() || body.get("destination").is_some()) =>
                 {
-                    return Err(refuse(format!("this set also moves {id} to another zone")));
+                    return Err(refuse(format!(
+                        "this set also changes the zones of policy {id}; stage zone moves \
+                         and reorders in separate change sets"
+                    )));
                 }
                 _ => {}
             }
@@ -424,13 +429,19 @@ pub fn rollback_ids(prior_entry: &Value, applied: &[String]) -> Vec<String> {
     ids
 }
 
-/// Whether the live pair holds `applied` in that order. Policies the order
-/// did not name (one created later in the set) are ignored.
+/// Whether the live pair holds exactly `applied`, in that order, apart from
+/// policies this set created (one created after the reorder lands last and is
+/// ignored). Any other extra policy fails: it was not approved.
 #[must_use]
-pub fn order_took(live_entry: &Value, applied: &[String]) -> bool {
+pub fn order_took<'a>(
+    live_entry: &Value,
+    applied: &[String],
+    created: impl IntoIterator<Item = &'a String>,
+) -> bool {
+    let created: BTreeSet<&String> = created.into_iter().collect();
     let live: Vec<String> = entry_order(live_entry)
         .into_iter()
-        .filter(|id| applied.contains(id))
+        .filter(|id| applied.contains(id) || !created.contains(id))
         .collect();
     live == applied
 }
@@ -645,8 +656,25 @@ mod tests {
     #[test]
     fn verification_reads_the_order_back() {
         let entry = pair_entry(&live_list(), LAN, WAN).expect("entry");
-        assert!(order_took(&entry, &[A.to_owned(), B.to_owned()]));
-        assert!(!order_took(&entry, &[B.to_owned(), A.to_owned()]));
+        assert!(order_took(&entry, &[A.to_owned(), B.to_owned()], []));
+        assert!(!order_took(&entry, &[B.to_owned(), A.to_owned()], []));
+        // A policy this set created later is ignored; any other extra is not.
+        assert!(order_took(&entry, &[A.to_owned()], [&B.to_owned()]));
+        assert!(!order_took(&entry, &[A.to_owned()], []));
+    }
+
+    #[test]
+    fn a_zone_move_in_a_reordering_set_is_refused() {
+        let error = check(&[
+            StagedMutation::reorder(LAN, WAN, vec![id(A), id(B)]),
+            StagedMutation::update(
+                POLICY_KIND,
+                "000000000000000000000299",
+                json!({"source": {"zone_id": LAN}}),
+            ),
+        ])
+        .expect_err("moves a policy into the pair");
+        assert!(error.to_string().contains("changes the zones"), "{error}");
     }
 
     #[test]
